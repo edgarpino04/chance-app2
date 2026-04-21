@@ -42,71 +42,65 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: "Texto vacío" }) };
   }
 
-  const systemPrompt = `Eres EL CHAKATÍN — el intérprete de sueños más famoso de Panamá, con la sabiduría de los billeteros legendarios de la Lotería Nacional de Beneficencia. Hablas con humor panameño auténtico al estilo de Malcolm Ramos.
+  const systemPrompt = `Eres EL CHAKATIN, el interprete de sueños mas famoso de Panama, con la sabiduria de los billeteros legendarios de la Loteria Nacional de Beneficencia (LNB). Hablas con humor panameño autentico al estilo de Malcolm Ramos.
 
-═══ REGLA MÁS IMPORTANTE ═══
-CADA explicación DEBE MENCIONAR elementos ESPECÍFICOS del sueño que te contó el usuario. NO uses frases genéricas. Si el usuario sueña con un perro blanco, habla del perro blanco. Si menciona la Vía España, menciona la Vía España. SIEMPRE haz que la explicación tenga sentido con lo que te contaron.
+REGLA MAS IMPORTANTE:
+CADA explicacion DEBE MENCIONAR elementos ESPECIFICOS del sueño que te conto el usuario. NO uses frases genericas. Si el usuario sueña con un perro blanco, habla del perro blanco. Si menciona la Via Españia, menciona la Via Españia. Haz que la explicacion tenga sentido con lo que te contaron.
 
-═══ TRADICIÓN DE NÚMEROS PANAMÁ ═══
-agua=14 · muerto=48 · sangre=07 · serpiente=35 · pescado=19 · perro=04
-dinero=50 · accidente/caída=73 · fuego=08 · bebé/niño=01 · mujer=11 · hombre=22
-luna=09 · sol=51 · estrella=51 · diablo=66 · pájaro=55 · avión=55 · carro=28
-oro=12 · iglesia/Dios=10 · boda=11 · fiesta=77 · policía/ladrón=73
-caballo=18 · vaca/toro=05 · gallo=21 · cerdo=03 · árbol=35 · flor=19
-casa=22 · mar/playa=14 · lluvia=14 · tierra/terremoto=17 · gato=07 · hospital=07
+TRADICION DE NUMEROS PANAMA:
+agua=14, muerto=48, sangre=07, serpiente=35, pescado=19, perro=04, dinero=50, accidente=73, caida=73, fuego=08, bebe=01, niño=01, mujer=11, hombre=22, luna=09, sol=51, estrella=51, diablo=66, pajaro=55, avion=55, carro=28, oro=12, iglesia=10, dios=10, boda=11, fiesta=77, policia=73, ladron=73, caballo=18, vaca=05, toro=05, gallo=21, cerdo=03, arbol=35, flor=19, casa=22, mar=14, playa=14, lluvia=14, tierra=17, terremoto=17, gato=07, hospital=07, llorar=07, risa=77, traicion=11, pelea=73
 
-═══ HUMOR Y TONO PANAMEÑO ═══
-Puedes usar con naturalidad (pero no forzado):
-- Expresiones: "no joda", "qué xopá", "mano", "cuñao", "ahuevao", "ese está bravo", "sácale el jugo", "vayayyy", "vaina sería"
-- Referencias: billetero, LNB, tómbola, chance, fracción, serie y folio
+HUMOR Y TONO PANAMEÑO (usalo con naturalidad):
+- Expresiones: "no joda", "que xopa", "mano", "cuñao", "ese esta bravo", "sacale el jugo", "vayayyy", "vaina seria"
+- Referencias: billetero, LNB, tombola, chance, fraccion
 
-═══ REGLAS INVIOLABLES ═══
-1. Elige 3 números DIFERENTES entre sí (del 00 al 99)
-2. Si el usuario describe claramente uno o varios elementos (ej. "muerto"=48), USA ese número. No inventes.
-3. Si no hay palabras claves claras, interpreta el tono/sentimiento del sueño y asigna números basados en eso.
-4. CADA explicación debe:
-   - Mencionar un detalle concreto del sueño del usuario
-   - Explicar por qué ese elemento = ese número
-   - Tener 2-4 oraciones
-   - Ser ÚNICA (no repetir frases entre explicaciones)
-5. Los "elementos" deben ser las palabras/cosas del sueño que detectaste
-6. Frase motivadora final: corta, con humor panameño, relacionada con el sueño
+REGLAS INVIOLABLES:
+1. Elige 3 numeros DIFERENTES entre si (del 00 al 99, con cero a la izquierda si es menor a 10)
+2. Si el usuario describe elementos claros (ej. muerto=48, mujer=11), USA esos numeros
+3. CADA explicacion debe mencionar un detalle concreto del sueño del usuario
+4. Cada explicacion debe tener 2-4 oraciones y ser UNICA
+5. Frase motivadora final corta con humor panameño
 
-═══ FORMATO DE RESPUESTA ═══
-Responde ÚNICAMENTE con este JSON válido (sin texto adicional, sin markdown, sin triple backticks):
-{"numeros":["XX","YY","ZZ"],"explicaciones":["explicación 1 con detalle del sueño","explicación 2 con otro detalle","explicación 3 con otro detalle"],"frase_motivadora":"frase","elementos":["elemento1","elemento2","elemento3"]}
+FORMATO OBLIGATORIO - Responde SOLO con este JSON valido, SIN markdown, SIN backticks, SIN texto extra:
+{"numeros":["XX","YY","ZZ"],"explicaciones":["texto 1","texto 2","texto 3"],"frase_motivadora":"frase","elementos":["elem1","elem2","elem3"]}
 
 Sueño del usuario: "${texto}"`;
 
-  // Reintentos con fallback de modelos — para manejar 503 (sobrecarga) y 429 (rate limit)
+  // Modelos con fallback — priorizar los más estables y sin "thinking mode"
   const MODELOS_FALLBACK = [
-    "gemini-2.5-flash",       // Modelo principal (más inteligente)
-    "gemini-2.5-flash-lite",  // Alternativa más ligera si el principal está saturado
-    "gemini-2.0-flash",       // Última alternativa
+    "gemini-2.0-flash",        // Más estable para JSON estructurado, sin thinking
+    "gemini-2.5-flash-lite",   // Ligero, sin thinking mode por defecto
+    "gemini-2.5-flash",        // Último recurso
   ];
 
   const llamarGemini = async (modelo, intento = 1) => {
+    const body = {
+      contents: [{
+        parts: [{ text: systemPrompt }]
+      }],
+      generationConfig: {
+        temperature: 0.9,
+        maxOutputTokens: 3000,  // Aumentado por si el modelo usa tokens en "thinking"
+      }
+    };
+
+    // Para modelos 2.5 que tienen "thinking mode", desactivarlo explícitamente
+    if (modelo.startsWith("gemini-2.5")) {
+      body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+    }
+
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{ text: systemPrompt }]
-          }],
-          generationConfig: {
-            temperature: 0.9,
-            maxOutputTokens: 1500,
-            responseMimeType: "application/json"
-          }
-        })
+        body: JSON.stringify(body)
       }
     );
 
     // 503 (overloaded) o 429 (rate limit) → reintenta con backoff exponencial
     if ((response.status === 503 || response.status === 429) && intento < 3) {
-      const delay = 800 * Math.pow(2, intento - 1); // 800ms, 1600ms, 3200ms
+      const delay = 800 * Math.pow(2, intento - 1);
       await new Promise(r => setTimeout(r, delay));
       return llamarGemini(modelo, intento + 1);
     }
@@ -127,7 +121,6 @@ Sueño del usuario: "${texto}"`;
         const errText = await response.text();
         ultimoError = `${modelo}: ${response.status} - ${errText.substring(0, 200)}`;
         console.warn(`Modelo ${modelo} falló:`, response.status);
-        // Si fue 503 o 429, probar con el siguiente modelo
         if (response.status !== 503 && response.status !== 429) break;
       } catch (e) {
         ultimoError = `${modelo}: ${e.message}`;
@@ -147,11 +140,36 @@ Sueño del usuario: "${texto}"`;
     }
 
     const data = await response.json();
-    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
+    // Debug: log finishReason si es problemático
+    const finishReason = data.candidates?.[0]?.finishReason;
+    if (finishReason && finishReason !== "STOP") {
+      console.warn("Finish reason:", finishReason);
+    }
+
+    let rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+    // Si no hay texto pero hay contenido en otros formatos, intentar extraer
+    if (!rawText) {
+      console.error("Respuesta sin texto. Data completa:", JSON.stringify(data).substring(0, 500));
+      return {
+        statusCode: 502,
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: JSON.stringify({
+          error: "La IA respondió vacío. Intenta con otro texto o en un momento."
+        })
+      };
+    }
+
+    // Limpiar wrappers de markdown que a veces Gemini agrega
+    rawText = rawText.trim();
+    rawText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "");
+    rawText = rawText.trim();
+
+    // Extraer el primer objeto JSON válido
     const match = rawText.match(/\{[\s\S]*\}/);
     if (!match) {
-      console.error("No JSON in response:", rawText);
+      console.error("No JSON in response. Raw text:", rawText.substring(0, 300));
       return {
         statusCode: 502,
         headers: { "Access-Control-Allow-Origin": "*" },
@@ -163,37 +181,10 @@ Sueño del usuario: "${texto}"`;
     try {
       parsed = JSON.parse(match[0]);
     } catch (e) {
-      console.error("JSON parse error:", e, match[0]);
-      return {
-        statusCode: 502,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({ error: "JSON inválido de la IA" })
-      };
-    }
-
-    if (!parsed.numeros || !Array.isArray(parsed.numeros) || parsed.numeros.length !== 3) {
-      return {
-        statusCode: 502,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({ error: "La IA no devolvió 3 números" })
-      };
-    }
-
-    return {
-      statusCode: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
-      body: JSON.stringify(parsed)
-    };
-
-  } catch (err) {
-    console.error("Function error:", err);
-    return {
-      statusCode: 500,
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: JSON.stringify({ error: "Error interno: " + err.message })
-    };
-  }
-};
+      console.error("JSON parse error:", e.message, "Raw:", match[0].substring(0, 300));
+      // Último intento: arreglar comas/comillas comunes
+      try {
+        const cleaned = match[0]
+          .replace(/,(\s*[}\]])/g, "$1")  // quitar comas finales
+          .replace(/[\u201C\u201D]/g, '"') // comillas curvas
+      
