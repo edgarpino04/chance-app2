@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#08101E" />
+    <meta name="description" content="CHANCE — El Billetero de Todos · Lotería Nacional de Panamá" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="CHANCE" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/logo192.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <title>CHANCE — El Billetero de Todos</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body, #root {
+        height: 100%;
+        background: #08101E;
+        font-family: 'DM Sans', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        overscroll-behavior: none;
+      }
+      #splash {
+        position: fixed; inset: 0;
+        background: #08101E;
+        display: flex; align-items: center; justify-content: center;
+        flex-direction: column; gap: 16px; z-index: 9999;
+        transition: opacity 0.5s;
+      }
+      #splash.hidden { opacity: 0; pointer-events: none; }
+      #splash-logo { font-family: 'Bebas Neue', sans-serif; font-size: 52px;
+        color: #FFCC33; letter-spacing: 14px;
+        text-shadow: 0 0 40px rgba(255,204,51,.5); }
+      #splash-sub { font-size: 11px; color: #93ADCC; letter-spacing: 4px; text-transform: uppercase; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .splash-spinner { width: 36px; height: 36px; border: 3px solid rgba(255,204,51,.2);
+        border-top-color: #FFCC33; border-radius: 50%; animation: spin .8s linear infinite; }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <script type="module" crossorigin src="/assets/index-CtyCOiCh.js"></script>
+  <link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>
+  <body>
+    <div id="splash">
+      <div id="splash-logo">CHANCE</div>
+      <div id="splash-sub">Lotería Nacional · Panamá</div>
+      <div class="splash-spinner"></div>
+    </div>
+    <div id="root"></div>
+    <script>
+      window.addEventListener('load', () => {
+        setTimeout(() => {
+          const s = document.getElementById('splash');
+          if (s) s.classList.add('hidden');
+        }, 700);
+      });
+    </script>
+  </body>
+</html>
