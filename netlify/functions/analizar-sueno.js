@@ -1,190 +1,213 @@
-// Netlify Serverless Function — Proxy seguro para Google Gemini API
-// La API key vive aquí en el servidor, nunca llega al navegador
-// ⚠️ REQUIERE: Configurar GEMINI_API_KEY en Netlify → Site configuration → Environment variables
+// Netlify Serverless Function — Proxy a Google Gemini API
+// ⚠️ REQUIERE: Configurar GEMINI_API_KEY en Netlify → Environment variables
 // Obtén tu clave GRATIS en: https://aistudio.google.com/apikey
 
 exports.handler = async (event) => {
-  // CORS preflight
+  // CORS
   if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-      body: ""
-    };
+    return { statusCode: 204, headers: corsHeaders(), body: "" };
   }
 
   if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: JSON.stringify({ error: "Método no permitido" }) };
+    return jsonResponse(405, { error: "Método no permitido" });
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return {
-      statusCode: 500,
-      headers: { "Access-Control-Allow-Origin": "*" },
-      body: JSON.stringify({ error: "GEMINI_API_KEY no configurada en Netlify" })
-    };
+    return jsonResponse(500, { error: "GEMINI_API_KEY no configurada en Netlify" });
   }
 
   let texto = "";
   try {
-    const body = JSON.parse(event.body || "{}");
-    texto = (body.texto || "").trim();
+    texto = (JSON.parse(event.body || "{}").texto || "").trim();
   } catch {
-    return { statusCode: 400, body: JSON.stringify({ error: "Body inválido" }) };
+    return jsonResponse(400, { error: "Body inválido" });
   }
 
-  if (!texto) {
-    return { statusCode: 400, body: JSON.stringify({ error: "Texto vacío" }) };
+  if (!texto) return jsonResponse(400, { error: "Texto vacío" });
+
+  // Prompt minimalista y directo — enfocado en que Gemini siempre devuelva JSON
+  const prompt = buildPrompt(texto);
+
+  // Intentar con gemini-2.0-flash (modelo estable, sin thinking mode)
+  try {
+    const result = await callGemini(apiKey, "gemini-2.0-flash", prompt);
+
+    if (result.ok) {
+      return jsonResponse(200, result.data);
+    }
+
+    // Si falla, intentar con 1.5-flash (más viejo pero aún disponible en algunas cuentas)
+    const result2 = await callGemini(apiKey, "gemini-flash-latest", prompt);
+    if (result2.ok) {
+      return jsonResponse(200, result2.data);
+    }
+
+    // Si los dos fallan, devolver error con info de debug
+    return jsonResponse(502, {
+      error: "No se pudo procesar. Intenta en 1 minuto.",
+      debug: result.error || result2.error
+    });
+
+  } catch (err) {
+    console.error("Function crashed:", err);
+    return jsonResponse(500, { error: "Error interno: " + err.message });
   }
+};
 
-  const systemPrompt = `Eres EL CHAKATIN, el interprete de sueños mas famoso de Panama, con la sabiduria de los billeteros legendarios de la Loteria Nacional de Beneficencia (LNB). Hablas con humor panameño autentico al estilo de Malcolm Ramos.
+// ══════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════
 
-REGLA MAS IMPORTANTE:
-CADA explicacion DEBE MENCIONAR elementos ESPECIFICOS del sueño que te conto el usuario. NO uses frases genericas. Si el usuario sueña con un perro blanco, habla del perro blanco. Si menciona la Via Españia, menciona la Via Españia. Haz que la explicacion tenga sentido con lo que te contaron.
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+}
 
-TRADICION DE NUMEROS PANAMA:
-agua=14, muerto=48, sangre=07, serpiente=35, pescado=19, perro=04, dinero=50, accidente=73, caida=73, fuego=08, bebe=01, niño=01, mujer=11, hombre=22, luna=09, sol=51, estrella=51, diablo=66, pajaro=55, avion=55, carro=28, oro=12, iglesia=10, dios=10, boda=11, fiesta=77, policia=73, ladron=73, caballo=18, vaca=05, toro=05, gallo=21, cerdo=03, arbol=35, flor=19, casa=22, mar=14, playa=14, lluvia=14, tierra=17, terremoto=17, gato=07, hospital=07, llorar=07, risa=77, traicion=11, pelea=73
+function jsonResponse(statusCode, bodyObj) {
+  return {
+    statusCode,
+    headers: { "Content-Type": "application/json", ...corsHeaders() },
+    body: JSON.stringify(bodyObj)
+  };
+}
 
-HUMOR Y TONO PANAMEÑO (usalo con naturalidad):
-- Expresiones: "no joda", "que xopa", "mano", "cuñao", "ese esta bravo", "sacale el jugo", "vayayyy", "vaina seria"
-- Referencias: billetero, LNB, tombola, chance, fraccion
+function buildPrompt(textoUsuario) {
+  return `Eres EL CHAKATIN, el interprete de sueños mas famoso de Panama. Usas humor panameño al estilo Malcolm Ramos.
 
-REGLAS INVIOLABLES:
-1. Elige 3 numeros DIFERENTES entre si (del 00 al 99, con cero a la izquierda si es menor a 10)
-2. Si el usuario describe elementos claros (ej. muerto=48, mujer=11), USA esos numeros
-3. CADA explicacion debe mencionar un detalle concreto del sueño del usuario
-4. Cada explicacion debe tener 2-4 oraciones y ser UNICA
-5. Frase motivadora final corta con humor panameño
+TRADICION PANAMA (numeros de la loteria):
+agua=14, muerto=48, sangre=07, serpiente=35, pescado=19, perro=04, dinero=50, accidente=73, caida=73, fuego=08, bebe=01, mujer=11, hombre=22, luna=09, sol=51, diablo=66, pajaro=55, carro=28, oro=12, iglesia=10, boda=11, fiesta=77, policia=73, caballo=18, vaca=05, gallo=21, arbol=35, flor=19, casa=22, mar=14, gato=07, traicion=11, pelea=73, beso=11, llorar=07
 
-FORMATO OBLIGATORIO - Responde SOLO con este JSON valido, SIN markdown, SIN backticks, SIN texto extra:
-{"numeros":["XX","YY","ZZ"],"explicaciones":["texto 1","texto 2","texto 3"],"frase_motivadora":"frase","elementos":["elem1","elem2","elem3"]}
+TAREA:
+Analiza el sueño del usuario y da 3 numeros diferentes (del 00 al 99) con explicaciones que mencionen detalles concretos del sueño. Usa humor panameño natural.
 
-Sueño del usuario: "${texto}"`;
+SUEÑO DEL USUARIO:
+${textoUsuario}
 
-  // Modelos con fallback — priorizar los más estables y sin "thinking mode"
-  const MODELOS_FALLBACK = [
-    "gemini-2.0-flash",        // Más estable para JSON estructurado, sin thinking
-    "gemini-2.5-flash-lite",   // Ligero, sin thinking mode por defecto
-    "gemini-2.5-flash",        // Último recurso
-  ];
+FORMATO DE RESPUESTA (responde SOLO el JSON, sin texto extra, sin markdown, sin backticks):
+{"numeros":["XX","YY","ZZ"],"explicaciones":["explicacion 1 con detalle especifico del sueño","explicacion 2 diferente","explicacion 3 diferente"],"frase_motivadora":"frase corta panameña","elementos":["elem1","elem2","elem3"]}`;
+}
 
-  const llamarGemini = async (modelo, intento = 1) => {
+async function callGemini(apiKey, modelo, prompt) {
+  try {
     const body = {
-      contents: [{
-        parts: [{ text: systemPrompt }]
-      }],
+      contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
-        temperature: 0.9,
-        maxOutputTokens: 3000,  // Aumentado por si el modelo usa tokens en "thinking"
+        temperature: 0.8,
+        maxOutputTokens: 2048,
       }
     };
 
-    // Para modelos 2.5 que tienen "thinking mode", desactivarlo explícitamente
+    // Desactivar "thinking" en modelos 2.5
     if (modelo.startsWith("gemini-2.5")) {
       body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
     }
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      }
-    );
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`;
+    console.log(`Llamando a ${modelo}...`);
 
-    // 503 (overloaded) o 429 (rate limit) → reintenta con backoff exponencial
-    if ((response.status === 503 || response.status === 429) && intento < 3) {
-      const delay = 800 * Math.pow(2, intento - 1);
-      await new Promise(r => setTimeout(r, delay));
-      return llamarGemini(modelo, intento + 1);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+
+    const statusCode = response.status;
+    const rawBody = await response.text();
+
+    if (!response.ok) {
+      console.error(`${modelo} error ${statusCode}:`, rawBody.substring(0, 500));
+      return { ok: false, error: `${modelo}: HTTP ${statusCode}` };
     }
 
-    return response;
-  };
-
-  try {
-    let response = null;
-    let ultimoError = null;
-
-    // Intentar con cada modelo hasta que uno funcione
-    for (const modelo of MODELOS_FALLBACK) {
-      try {
-        response = await llamarGemini(modelo);
-        if (response.ok) break;
-
-        const errText = await response.text();
-        ultimoError = `${modelo}: ${response.status} - ${errText.substring(0, 200)}`;
-        console.warn(`Modelo ${modelo} falló:`, response.status);
-        if (response.status !== 503 && response.status !== 429) break;
-      } catch (e) {
-        ultimoError = `${modelo}: ${e.message}`;
-        console.error(`Error con ${modelo}:`, e);
-      }
+    let data;
+    try {
+      data = JSON.parse(rawBody);
+    } catch {
+      console.error(`${modelo} respuesta no JSON:`, rawBody.substring(0, 300));
+      return { ok: false, error: `${modelo}: respuesta no JSON` };
     }
 
-    if (!response || !response.ok) {
-      console.error("Todos los modelos fallaron:", ultimoError);
-      return {
-        statusCode: 502,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({
-          error: "Google Gemini está sobrecargado. Intenta en 1 minuto."
-        })
-      };
+    // Extraer texto del candidate
+    const candidate = data.candidates?.[0];
+    const finishReason = candidate?.finishReason;
+
+    if (finishReason === "SAFETY") {
+      return { ok: false, error: `${modelo}: bloqueado por filtros de seguridad` };
     }
 
-    const data = await response.json();
+    let responseText = candidate?.content?.parts?.[0]?.text;
 
-    // Debug: log finishReason si es problemático
-    const finishReason = data.candidates?.[0]?.finishReason;
-    if (finishReason && finishReason !== "STOP") {
-      console.warn("Finish reason:", finishReason);
+    if (!responseText) {
+      console.error(`${modelo} sin texto. Data:`, JSON.stringify(data).substring(0, 500));
+      return { ok: false, error: `${modelo}: respuesta vacía (finishReason=${finishReason})` };
     }
 
-    let rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    // Limpiar markdown
+    responseText = responseText.trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
 
-    // Si no hay texto pero hay contenido en otros formatos, intentar extraer
-    if (!rawText) {
-      console.error("Respuesta sin texto. Data completa:", JSON.stringify(data).substring(0, 500));
-      return {
-        statusCode: 502,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({
-          error: "La IA respondió vacío. Intenta con otro texto o en un momento."
-        })
-      };
-    }
-
-    // Limpiar wrappers de markdown que a veces Gemini agrega
-    rawText = rawText.trim();
-    rawText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "");
-    rawText = rawText.trim();
-
-    // Extraer el primer objeto JSON válido
-    const match = rawText.match(/\{[\s\S]*\}/);
-    if (!match) {
-      console.error("No JSON in response. Raw text:", rawText.substring(0, 300));
-      return {
-        statusCode: 502,
-        headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({ error: "La IA no devolvió formato válido" })
-      };
+    // Extraer JSON
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.error(`${modelo} sin JSON en texto:`, responseText.substring(0, 300));
+      return { ok: false, error: `${modelo}: sin JSON en respuesta` };
     }
 
     let parsed;
     try {
-      parsed = JSON.parse(match[0]);
+      parsed = JSON.parse(jsonMatch[0]);
     } catch (e) {
-      console.error("JSON parse error:", e.message, "Raw:", match[0].substring(0, 300));
-      // Último intento: arreglar comas/comillas comunes
+      // Limpieza de emergencia
       try {
-        const cleaned = match[0]
-          .replace(/,(\s*[}\]])/g, "$1")  // quitar comas finales
-          .replace(/[\u201C\u201D]/g, '"') // comillas curvas
-      
+        parsed = JSON.parse(
+          jsonMatch[0]
+            .replace(/,(\s*[}\]])/g, "$1")
+            .replace(/[\u201C\u201D]/g, '"')
+            .replace(/[\u2018\u2019]/g, "'")
+        );
+      } catch {
+        console.error(`${modelo} JSON inválido:`, jsonMatch[0].substring(0, 300));
+        return { ok: false, error: `${modelo}: JSON inválido` };
+      }
+    }
+
+    // Validar estructura
+    if (!Array.isArray(parsed.numeros) || parsed.numeros.length < 3) {
+      return { ok: false, error: `${modelo}: sin 3 números` };
+    }
+
+    // Normalizar números a 2 dígitos
+    parsed.numeros = parsed.numeros.slice(0, 3).map(n => {
+      const digitos = String(n).replace(/\D/g, "");
+      return digitos.padStart(2, "0").substring(0, 2);
+    });
+
+    // Garantizar explicaciones y elementos
+    if (!Array.isArray(parsed.explicaciones) || parsed.explicaciones.length < 3) {
+      parsed.explicaciones = [
+        `El ${parsed.numeros[0]} aparece en tu sueño con fuerza.`,
+        `El ${parsed.numeros[1]} complementa la energía del relato.`,
+        `El ${parsed.numeros[2]} cierra la jugada con buen pie.`
+      ];
+    }
+    if (!parsed.frase_motivadora) {
+      parsed.frase_motivadora = "¡Dale con todo a esos números!";
+    }
+    if (!Array.isArray(parsed.elementos)) {
+      parsed.elementos = ["tu sueño"];
+    }
+
+    console.log(`${modelo} OK`);
+    return { ok: true, data: parsed };
+
+  } catch (err) {
+    console.error(`${modelo} excepción:`, err.message);
+    return { ok: false, error: `${modelo}: ${err.message}` };
+  }
+}
