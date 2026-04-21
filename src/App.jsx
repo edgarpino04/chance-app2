@@ -2428,10 +2428,11 @@ function SuerteScreen() {
 
       if (resp.status === 502) {
         const errData = await resp.json().catch(() => ({}));
-        throw new Error(
-          "Error al contactar la IA de Google Gemini: " + (errData.error || "verifica tu API key") +
-          ". Puede que tu clave esté inválida o excediste el límite gratuito."
-        );
+        let msg = errData.error || "Error desconocido";
+        if (errData.debug) {
+          msg += " | Detalle: " + errData.debug;
+        }
+        throw new Error(msg);
       }
 
       if (!resp.ok) {
