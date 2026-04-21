@@ -4702,7 +4702,10 @@ const NAV={
   ],
 };
 
-function App({ forceRole=null, authUser=null, onLogout=null }) {
+function App({ forceRole=null, authUser=null, onLogout=null,
+  sharedBilletes, setSharedBilletes,
+  sharedChances, setSharedChances,
+  sharedOrders, setSharedOrders }) {
   const [phase,        setPhase]       = useState(forceRole?"app":"splash");
   const [role,         setRole]        = useState(forceRole);
   const [activeRole,   setActiveRole]  = useState(forceRole);
@@ -4712,10 +4715,7 @@ function App({ forceRole=null, authUser=null, onLogout=null }) {
   const [screenData,   setScreenData]  = useState(null);
   const [cart,         setCart]        = useState([]);
 
-  // ── ESTADO COMPARTIDO GLOBAL ─────────────────────────────────────────────
-  const [sharedBilletes, setSharedBilletes] = useState(VENDORS[0].billetes);
-  const [sharedChances,  setSharedChances]  = useState(VENDORS[0].chances);
-  const [sharedOrders,   setSharedOrders]   = useState([]);
+  // ── ESTADO COMPARTIDO GLOBAL (ahora viene de ChanceRoot, persistido en storage) ──
 
   /*
    ╔══════════════════════════════════════════════════════════════════════╗
@@ -4765,7 +4765,9 @@ function App({ forceRole=null, authUser=null, onLogout=null }) {
       itemCount:items.length, vendor:items[0].vendor||"Carlos Medina V001",
       vendorId:items[0].vendorId||"V001", lotteryValue:lotteryTotal.toFixed(2),
       deliveryFee:"2.50", tip:"0", paymentMethod:method,
-      deliveryAddr:addr?.label||"Casa", customerId:"cliente_maria",
+      deliveryAddr:addr?.label||"Casa",
+      customerId: authUser?.id || "cliente_maria",
+      customerName: authUser?.nombre || "Cliente",
       status:"PENDIENTE", round:1,          // round: número de vuelta de negociación
       history:[{by:"cliente",action:"Pedido creado",at:ts()}],
       createdAt:ts(),
@@ -5025,7 +5027,7 @@ function App({ forceRole=null, authUser=null, onLogout=null }) {
     pedidos_v:    vendorActionNeeded,
     entregas_r:   approvedForDriver,
     batch_r:      approvedForDriver,
-    historial:    sharedOrders.filter(o=>o.customerId==="cliente_maria"&&["PENDIENTE","APROBADO","EN_CAMINO","MODIFICADO","REEMPLAZO"].includes(o.status)).length,
+    historial:    sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria")&&["PENDIENTE","APROBADO","EN_CAMINO","MODIFICADO","REEMPLAZO"].includes(o.status)).length,
     home_cliente: modifiedForClient,
   };
 
@@ -5047,7 +5049,7 @@ function App({ forceRole=null, authUser=null, onLogout=null }) {
       // ── CLIENTE
       case "home_cliente": return <ClienteHome cart={cart} nav={nav}
         sharedVendor={sharedVendor}
-        activeOrders={sharedOrders.filter(o=>o.customerId==="cliente_maria")}/>;
+        activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
       case "buscar":       return <BuscarScreen nav={nav} sharedVendor={sharedVendor}/>;
       case "suerte":       return <SuerteScreen/>
       case "explorar":     return <ExplorarScreen nav={nav}/>;
@@ -5060,9 +5062,9 @@ function App({ forceRole=null, authUser=null, onLogout=null }) {
         onConfirm={placeOrderWithSound}/>;
       case "confirmacion": return <ConfirmacionScreen orderId={screenData?.orderId||"CH-2408"} nav={nav}/>;
       case "tracking":     return <TrackingScreen
-        order={sharedOrders.find(o=>["EN_CAMINO","APROBADO"].includes(o.status)&&o.customerId==="cliente_maria")||null}/>;
+        order={sharedOrders.find(o=>["EN_CAMINO","APROBADO"].includes(o.status)&&(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))||null}/>;
       case "historial":    return <HistorialScreen nav={nav}
-        orders={sharedOrders.filter(o=>o.customerId==="cliente_maria")}
+        orders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}
         onClientApprove={clientApproveWithSound}
         onClientReject={clientRejectWithSound}
         onProposeReplacement={proposeReplacementWithSound}
@@ -5130,7 +5132,7 @@ function App({ forceRole=null, authUser=null, onLogout=null }) {
       default:
         if (role==="vendedor")   return <VendedorHome   billetes={sharedBilletes} setBilletes={setSharedBilletes} chances={sharedChances} setChances={setSharedChances} orders={sharedOrders} onApprove={approveOrder} onModify={modifyOrderWithSound} onApproveReplacement={vendorApproveReplacementWithSound} onRejectReplacement={vendorRejectReplacementWithSound} onCancelByVendor={vendorCancelOrder} activeSorteo={vendorActiveSorteo} setActiveSorteo={setVendorActiveSorteo} initTab="tablero"/>;
         if (role==="repartidor") return <RepartidorHome orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} initTab="inicio"/>;
-        return <ClienteHome cart={cart} nav={nav} sharedVendor={sharedVendor} activeOrders={sharedOrders.filter(o=>o.customerId==="cliente_maria")}/>;
+        return <ClienteHome cart={cart} nav={nav} sharedVendor={sharedVendor} activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
     }
   };
 
@@ -6513,6 +6515,54 @@ export default function ChanceRoot() {
   const [booting,    setBooting]    = useState(true);
   const [registerSuccess, setRegisterSuccess] = useState(null); // {nombre, email} after registration
 
+  // ── ESTADO COMPARTIDO GLOBAL (persistido entre sesiones y roles) ──
+  // Vive en ChanceRoot (top-level) para que TODOS los roles vean los mismos pedidos
+  const [sharedBilletes, setSharedBilletes] = useState(VENDORS[0].billetes);
+  const [sharedChances,  setSharedChances]  = useState(VENDORS[0].chances);
+  const [sharedOrders,   setSharedOrders]   = useState([]);
+  const [stateLoaded,    setStateLoaded]    = useState(false);
+
+  // Cargar estado persistido al iniciar
+  useEffect(() => {
+    (async () => {
+      try {
+        const [ordersR, billetesR, chancesR] = await Promise.all([
+          window.storage.get("shared_orders_db"),
+          window.storage.get("shared_billetes_db"),
+          window.storage.get("shared_chances_db"),
+        ]);
+        if (ordersR?.value)   setSharedOrders(JSON.parse(ordersR.value));
+        if (billetesR?.value) setSharedBilletes(JSON.parse(billetesR.value));
+        if (chancesR?.value)  setSharedChances(JSON.parse(chancesR.value));
+      } catch(e) {}
+      setStateLoaded(true);
+    })();
+  }, []);
+
+  // Guardar pedidos cada vez que cambien
+  useEffect(() => {
+    if (!stateLoaded) return;
+    (async () => {
+      try { await window.storage.set("shared_orders_db", JSON.stringify(sharedOrders)); } catch(e) {}
+    })();
+  }, [sharedOrders, stateLoaded]);
+
+  // Guardar billetes cada vez que cambien
+  useEffect(() => {
+    if (!stateLoaded) return;
+    (async () => {
+      try { await window.storage.set("shared_billetes_db", JSON.stringify(sharedBilletes)); } catch(e) {}
+    })();
+  }, [sharedBilletes, stateLoaded]);
+
+  // Guardar chances cada vez que cambien
+  useEffect(() => {
+    if (!stateLoaded) return;
+    (async () => {
+      try { await window.storage.set("shared_chances_db", JSON.stringify(sharedChances)); } catch(e) {}
+    })();
+  }, [sharedChances, stateLoaded]);
+
   // Seed demo users and restore session on mount
   useEffect(() => {
     (async () => {
@@ -6599,5 +6649,12 @@ export default function ChanceRoot() {
 
   // Active user → Main app with correct role
   const roleMap = { cliente:"cliente", vendedor:"vendedor", repartidor:"repartidor" };
-  return <>{allCSS}<App forceRole={roleMap[authUser.rol]||"cliente"} authUser={authUser} onLogout={handleLogout}/></>;
+  return <>{allCSS}<App
+    forceRole={roleMap[authUser.rol]||"cliente"}
+    authUser={authUser}
+    onLogout={handleLogout}
+    sharedBilletes={sharedBilletes} setSharedBilletes={setSharedBilletes}
+    sharedChances={sharedChances}   setSharedChances={setSharedChances}
+    sharedOrders={sharedOrders}     setSharedOrders={setSharedOrders}
+  /></>;
 }
