@@ -78,10 +78,16 @@ Responde ÚNICAMENTE con este JSON válido (sin texto adicional, sin markdown, s
 
 Sueño del usuario: "${texto}"`;
 
-  try {
-    // Gemini 1.5 Flash - rápido y gratis (tier generoso: 1500 reqs/día)
+  // Reintentos con fallback de modelos — para manejar 503 (sobrecarga) y 429 (rate limit)
+  const MODELOS_FALLBACK = [
+    "gemini-2.5-flash",       // Modelo principal (más inteligente)
+    "gemini-2.5-flash-lite",  // Alternativa más ligera si el principal está saturado
+    "gemini-2.0-flash",       // Última alternativa
+  ];
+
+  const llamarGemini = async (modelo, intento = 1) => {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -98,13 +104,45 @@ Sueño del usuario: "${texto}"`;
       }
     );
 
-    if (!response.ok) {
-      const err = await response.text();
-      console.error("Gemini error:", response.status, err);
+    // 503 (overloaded) o 429 (rate limit) → reintenta con backoff exponencial
+    if ((response.status === 503 || response.status === 429) && intento < 3) {
+      const delay = 800 * Math.pow(2, intento - 1); // 800ms, 1600ms, 3200ms
+      await new Promise(r => setTimeout(r, delay));
+      return llamarGemini(modelo, intento + 1);
+    }
+
+    return response;
+  };
+
+  try {
+    let response = null;
+    let ultimoError = null;
+
+    // Intentar con cada modelo hasta que uno funcione
+    for (const modelo of MODELOS_FALLBACK) {
+      try {
+        response = await llamarGemini(modelo);
+        if (response.ok) break;
+
+        const errText = await response.text();
+        ultimoError = `${modelo}: ${response.status} - ${errText.substring(0, 200)}`;
+        console.warn(`Modelo ${modelo} falló:`, response.status);
+        // Si fue 503 o 429, probar con el siguiente modelo
+        if (response.status !== 503 && response.status !== 429) break;
+      } catch (e) {
+        ultimoError = `${modelo}: ${e.message}`;
+        console.error(`Error con ${modelo}:`, e);
+      }
+    }
+
+    if (!response || !response.ok) {
+      console.error("Todos los modelos fallaron:", ultimoError);
       return {
         statusCode: 502,
         headers: { "Access-Control-Allow-Origin": "*" },
-        body: JSON.stringify({ error: `Gemini API error: ${response.status}` })
+        body: JSON.stringify({
+          error: "Google Gemini está sobrecargado. Intenta en 1 minuto."
+        })
       };
     }
 
