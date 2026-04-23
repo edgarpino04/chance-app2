@@ -2807,25 +2807,65 @@ function ResultadosScreen({ initTab="resultados" }) {
               </div>
             )}
 
-            {/* Detalle del sorteo donde ganó */}
-            {verifResult.premio && (
-              <div style={{background:verifResult.premio.sorteo.bg,border:`1px solid ${verifResult.premio.sorteo.border}`,borderRadius:14,padding:"14px",marginBottom:12}}>
-                <div style={{fontSize:11,fontWeight:800,color:verifResult.premio.sorteo.color,letterSpacing:1,marginBottom:10}}>
-                  🎰 SORTEO {verifResult.premio.sorteo.tipo} Nº{verifResult.premio.sorteo.sorteoN}
+            {/* Detalle del sorteo que está siendo consultado (SIEMPRE visible) */}
+            {(() => {
+              // Determinar QUÉ sorteo mostrar:
+              // 1) Si ganó → el sorteo donde ganó
+              // 2) Si escaneó billete/chance → el sorteo más reciente del tipo correspondiente
+              // 3) Si ingresó número corto → el sorteo más reciente disponible
+              let sorteoMostrar = null;
+              let posicionGanadora = -1;
+
+              if (verifResult.premio) {
+                sorteoMostrar = verifResult.premio.sorteo;
+                posicionGanadora = verifResult.premio.posicion;
+              } else if (verifResult.decoded) {
+                // Para BILLETE: buscar Dominical/Miercolito/Extraordinaria que coincida con el sorteoN, o el más reciente
+                // Para CHANCE: buscar sorteo que coincida, o el más reciente
+                const sorteoN = verifResult.decoded.sorteo;
+                sorteoMostrar =
+                  SORTEOS_RECIENTES.find(s => s.sorteoN === sorteoN) ||
+                  SORTEOS_RECIENTES[0];
+              } else {
+                // Número manual sin estructura decoded → sorteo más reciente
+                sorteoMostrar = SORTEOS_RECIENTES[0];
+              }
+
+              if (!sorteoMostrar) return null;
+
+              return (
+                <div style={{background:sorteoMostrar.bg,border:`1px solid ${sorteoMostrar.border}`,borderRadius:14,padding:"14px",marginBottom:12}}>
+                  <div style={{fontSize:11,fontWeight:800,color:sorteoMostrar.color,letterSpacing:1,marginBottom:10}}>
+                    🎰 SORTEO {sorteoMostrar.tipo} Nº{sorteoMostrar.sorteoN}
+                  </div>
+                  <div style={{fontSize:10,color:"var(--muted)",marginBottom:10}}>
+                    {sorteoMostrar.fecha} · {sorteoMostrar.frecuencia}
+                  </div>
+                  <div style={{display:"flex",gap:7,marginBottom:8}}>
+                    {sorteoMostrar.premios.map((p,pi)=>(
+                      <div key={p.pos} style={{
+                        flex:1,
+                        background:"rgba(8,17,31,.4)",
+                        borderRadius:9,
+                        padding:"8px 3px",
+                        textAlign:"center",
+                        border: pi===posicionGanadora ? `2px solid ${sorteoMostrar.color}` : "1px solid transparent",
+                        boxShadow: pi===posicionGanadora ? `0 0 12px ${sorteoMostrar.color}60` : "none"
+                      }}>
+                        <div style={{fontSize:8,color:"var(--muted)",fontWeight:700,textTransform:"uppercase",marginBottom:2}}>{p.pos}</div>
+                        <div style={{fontFamily:"'Bebas Neue'",fontSize:p.num.length>4?14:18,color:cols[pi].c,letterSpacing:1,lineHeight:1}}>{p.num}</div>
+                        {p.letras&&<div style={{fontSize:8,color:sorteoMostrar.color,fontWeight:800,marginTop:1}}>{p.letras}</div>}
+                        {p.serie&&<div style={{fontSize:7,color:"var(--muted)",marginTop:1}}>S{p.serie} F{p.folio}</div>}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{background:"rgba(8,17,31,.3)",borderRadius:8,padding:"8px 10px",display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+                    <span style={{fontSize:9,color:"var(--muted)",fontWeight:700,textTransform:"uppercase"}}>Premio Mayor</span>
+                    <span style={{fontFamily:"'Bebas Neue'",fontSize:18,color:sorteoMostrar.color,letterSpacing:1}}>{sorteoMostrar.premioMayor}</span>
+                  </div>
                 </div>
-                <div style={{fontSize:10,color:"var(--muted)",marginBottom:10}}>{verifResult.premio.sorteo.fecha} · {verifResult.premio.sorteo.frecuencia}</div>
-                <div style={{display:"flex",gap:7,marginBottom:8}}>
-                  {verifResult.premio.sorteo.premios.map((p,pi)=>(
-                    <div key={p.pos} style={{flex:1,background:"rgba(8,17,31,.4)",borderRadius:9,padding:"8px 3px",textAlign:"center",border:pi===verifResult.premio.posicion?`2px solid ${verifResult.premio.sorteo.color}`:"none"}}>
-                      <div style={{fontSize:8,color:"var(--muted)",fontWeight:700,textTransform:"uppercase",marginBottom:2}}>{p.pos}</div>
-                      <div style={{fontFamily:"'Bebas Neue'",fontSize:p.num.length>4?14:18,color:cols[pi].c,letterSpacing:1,lineHeight:1}}>{p.num}</div>
-                      {p.letras&&<div style={{fontSize:8,color:verifResult.premio.sorteo.color,fontWeight:800,marginTop:1}}>{p.letras}</div>}
-                      {p.serie&&<div style={{fontSize:7,color:"var(--muted)",marginTop:1}}>S{p.serie} F{p.folio}</div>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Botones */}
             <div style={{display:"flex",gap:8}}>
