@@ -2410,55 +2410,139 @@ function ResultadosScreen({ initTab="resultados" }) {
   };
 
   /* ╔══════════════════════════════════════════════════════════════╗
-     ║  CÁMARA — Activar/Desactivar y escaneo con BarcodeDetector   ║
+     ║  CÁMARA — Activar/Desactivar con soporte robusto móvil       ║
+     ║  Fix para Samsung Chrome: setTimeout + onloadedmetadata      ║
      ╚══════════════════════════════════════════════════════════════╝ */
+  const [needsTap, setNeedsTap] = useState(false); // Estado: si autoplay falló
+
   const activarCamara = async () => {
     setCameraError("");
     setScannerLoading(true);
+    setNeedsTap(false);
 
     try {
-      // Verificar soporte de API
+      if (window.location.protocol !== "https:" && window.location.hostname !== "localhost") {
+        throw new Error("La cámara requiere HTTPS.");
+      }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error("Tu navegador no soporta acceso a la cámara");
+        throw new Error("Tu navegador no soporta acceso a la cámara. Usa Chrome o Safari actualizado.");
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" }, // cámara trasera
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        }
-      });
+      // Intentar con cámara trasera primero
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false
+        });
+      } catch (e) {
+        // Fallback: cualquier cámara disponible
+        console.warn("Cámara trasera falló, usando cualquiera:", e);
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+
       streamRef.current = stream;
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-
       setCameraActive(true);
       setScannerLoading(false);
-
-      // Iniciar detección si el navegador lo soporta
-      if ("BarcodeDetector" in window) {
-        try {
-          detectorRef.current = new window.BarcodeDetector({
-            formats: ["code_128", "ean_13", "itf", "code_39"]
-          });
-          iniciarEscaneo();
-        } catch (e) {
-          // Si falla la detección automática, queda solo input manual
-          console.warn("BarcodeDetector no disponible:", e);
-        }
-      }
     } catch (err) {
       setScannerLoading(false);
       let msg = "No se pudo acceder a la cámara.";
-      if (err.name === "NotAllowedError") msg = "Permiso de cámara denegado. Habilítalo en la configuración del navegador.";
-      else if (err.name === "NotFoundError") msg = "No se encontró cámara en este dispositivo.";
-      else if (err.message) msg = err.message;
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        msg = "Permiso de cámara denegado. Abre Configuración → Sitios → " + window.location.hostname + " → Cámara → Permitir.";
+      } else if (err.name === "NotFoundError") {
+        msg = "No se encontró cámara en este dispositivo.";
+      } else if (err.name === "NotReadableError") {
+        msg = "La cámara está siendo usada por otra app. Cierra apps con cámara (WhatsApp, Zoom, etc.) e intenta de nuevo.";
+      } else if (err.message) {
+        msg = err.message;
+      }
       setCameraError(msg);
     }
+  };
+
+  // Conectar el stream al <video> — se ejecuta después que React renderiza el elemento
+  useEffect(() => {
+    if (!cameraActive) return;
+
+    // Esperar a que el DOM esté actualizado (doble RAF para garantía en móvil)
+    let cancelled = false;
+    let rafId;
+
+    const conectar = () => {
+      if (cancelled) return;
+      const vid = videoRef.current;
+      const stream = streamRef.current;
+      if (!vid || !stream) {
+        // Reintentar en el próximo frame si aún no están listos
+        rafId = requestAnimationFrame(conectar);
+        return;
+      }
+
+      // Atributos CRÍTICOS para móviles (iOS + Android Chrome)
+      vid.muted = true;
+      vid.defaultMuted = true;
+      vid.playsInline = true;
+      vid.setAttribute("muted", "");
+      vid.setAttribute("playsinline", "");
+      vid.setAttribute("webkit-playsinline", "");
+      vid.setAttribute("autoplay", "");
+
+      // Asignar stream
+      vid.srcObject = stream;
+
+      // Cuando el video tenga metadata (dimensiones), intentar reproducir
+      const onMeta = () => {
+        const playPromise = vid.play();
+        if (playPromise) {
+          playPromise
+            .then(() => setNeedsTap(false))
+            .catch(err => {
+              console.warn("play() rechazado:", err);
+              setNeedsTap(true); // Mostrar botón "Toca para activar"
+            });
+        }
+      };
+
+      // Escuchar cuando esté listo
+      vid.addEventListener("loadedmetadata", onMeta, { once: true });
+
+      // También intentar reproducir ya (por si metadata ya está disponible)
+      if (vid.readyState >= 1) onMeta();
+
+      // Cuando empiece a reproducirse, iniciar detección de códigos
+      const onPlaying = () => {
+        if ("BarcodeDetector" in window && !detectorRef.current) {
+          try {
+            detectorRef.current = new window.BarcodeDetector({
+              formats: ["code_128", "ean_13", "itf", "code_39"]
+            });
+            iniciarEscaneo();
+          } catch (e) {
+            console.warn("BarcodeDetector no disponible:", e);
+          }
+        }
+      };
+      vid.addEventListener("playing", onPlaying, { once: true });
+    };
+
+    rafId = requestAnimationFrame(conectar);
+
+    return () => {
+      cancelled = true;
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [cameraActive]);
+
+  // Función para iniciar play manualmente (si autoplay falló)
+  const playVideoManual = () => {
+    const vid = videoRef.current;
+    if (!vid) return;
+    vid.play()
+      .then(() => setNeedsTap(false))
+      .catch(err => {
+        console.error("Play manual falló:", err);
+        setCameraError("No se pudo reproducir el video: " + err.message);
+      });
   };
 
   const iniciarEscaneo = () => {
@@ -2601,16 +2685,38 @@ function ResultadosScreen({ initTab="resultados" }) {
                 </>
               )}
               {cameraActive && (
-                <div style={{position:"relative",background:"#000"}}>
-                  <video ref={videoRef} autoPlay playsInline muted
-                    style={{width:"100%",display:"block",maxHeight:"60vh",objectFit:"cover"}}/>
+                <div style={{position:"relative",background:"#000",minHeight:320}}>
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    onClick={playVideoManual}
+                    style={{
+                      width:"100%",
+                      height:"auto",
+                      minHeight:320,
+                      maxHeight:"65vh",
+                      display:"block",
+                      objectFit:"cover",
+                      background:"#000"
+                    }}
+                  />
+                  {/* Overlay: "Toca para activar" si autoplay falló */}
+                  {needsTap && (
+                    <div onClick={playVideoManual}
+                      style={{position:"absolute",inset:0,background:"rgba(0,0,0,.6)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",zIndex:5}}>
+                      <div style={{fontSize:48,marginBottom:10}}>▶️</div>
+                      <div style={{color:"#fff",fontSize:14,fontWeight:700}}>Toca aquí para activar la cámara</div>
+                    </div>
+                  )}
                   {/* Overlay del frame de escaneo */}
                   <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",width:"80%",height:"40%",border:"3px solid rgba(255,204,51,.8)",borderRadius:12,boxShadow:"0 0 0 9999px rgba(0,0,0,.4)",pointerEvents:"none"}}>
                     <div style={{position:"absolute",left:0,right:0,top:"50%",height:2,background:"#FFCC33",boxShadow:"0 0 10px #FFCC33",animation:"scanlineMove 2s ease-in-out infinite"}}/>
                   </div>
                   <button onClick={desactivarCamara}
-                    style={{position:"absolute",top:10,right:10,width:36,height:36,borderRadius:"50%",background:"rgba(0,0,0,.7)",border:"1px solid rgba(255,255,255,.2)",color:"#fff",fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
-                  <div style={{position:"absolute",bottom:10,left:"50%",transform:"translateX(-50%)",background:"rgba(0,0,0,.7)",color:"#fff",padding:"6px 14px",borderRadius:20,fontSize:10,fontWeight:600}}>
+                    style={{position:"absolute",top:10,right:10,width:36,height:36,borderRadius:"50%",background:"rgba(0,0,0,.7)",border:"1px solid rgba(255,255,255,.2)",color:"#fff",fontSize:18,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",zIndex:10}}>✕</button>
+                  <div style={{position:"absolute",bottom:10,left:"50%",transform:"translateX(-50%)",background:"rgba(0,0,0,.7)",color:"#fff",padding:"6px 14px",borderRadius:20,fontSize:10,fontWeight:600,zIndex:6}}>
                     {"BarcodeDetector" in window ? "🔍 Buscando código…" : "ℹ️ Ingresa código manualmente abajo"}
                   </div>
                 </div>
