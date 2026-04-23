@@ -1899,8 +1899,8 @@ const HISTORIAL = [
     premios:[{pos:"1er",num:"0499",letras:"BACB",serie:"16",folio:"1"},{pos:"2do",num:"2975"},{pos:"3er",num:"3376"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3055", fecha:"11 Feb 2026", mes:2, anio:2026,
     premios:[{pos:"1er",num:"6682",letras:"ACAB",serie:"22",folio:"5"},{pos:"2do",num:"5424"},{pos:"3er",num:"4412"}] },
-  { tipo:"DOMINICAL",   sorteoN:"5542", fecha:"08 Feb 2026", mes:2, anio:2026,
-    premios:[{pos:"1er",num:"7501",letras:"ACCA",serie:"6",folio:"2"},{pos:"2do",num:"7097"},{pos:"3er",num:"8145"}] },
+  { tipo:"DOMINICAL",   sorteoN:"5542", fecha:"08 Mar 2026", mes:3, anio:2026,
+    premios:[{pos:"1er",num:"7565",letras:"CACC",serie:"8",folio:"1"},{pos:"2do",num:"0421"},{pos:"3er",num:"6513"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3054", fecha:"04 Feb 2026", mes:2, anio:2026,
     premios:[{pos:"1er",num:"7438",letras:"AADB",serie:"21",folio:"3"},{pos:"2do",num:"3826"},{pos:"3er",num:"7967"}] },
   { tipo:"DOMINICAL",   sorteoN:"5541", fecha:"01 Feb 2026", mes:2, anio:2026,
@@ -2292,20 +2292,40 @@ function ResultadosScreen({ initTab="resultados" }) {
      ║  [1-4] Sorteo · [5-6] Serie · [7-10] Número · [11-12] Folio  ║
      ║  [13-15] Control · [16-19] Fracción                          ║
      ║  Ejemplo: 5542 18 2583 13 230 2400                           ║
-     ║  → Sorteo 5542, Serie 18, Número 2583, Folio 13              ║
+     ║                                                               ║
+     ║  BILLETE ESPECIAL (Sorteo de Oro) — 20 dígitos:              ║
+     ║  [1-4] Sorteo · [5-6] Serie · [7-10] Número · [11-12] Folio  ║
+     ║  [13-16] Control · [17-20] Fracción                          ║
+     ║  Ejemplo: 5542 12 9327 09 3086 9995                          ║
      ║                                                               ║
      ║  CHANCE — 16 dígitos:                                        ║
      ║  [1-4] Sorteo · [5-8] Serie · [9-10] Número · [11-12] Folio  ║
      ║  [13-16] Control                                              ║
      ║  Ejemplo: 4050 4298 24 07 0834                               ║
-     ║  → Sorteo 4050, Serie 4298, Número 24, Folio 7, Control 0834 ║
      ╚══════════════════════════════════════════════════════════════╝ */
   const decodificarCodigo = (codigo) => {
     const clean = codigo.replace(/\D/g, "");
-    if (clean.length === 19) {
-      // BILLETE — 19 dígitos
+
+    // BILLETE ESPECIAL (Sorteo de Oro, Gordito, etc.) — 20 dígitos
+    if (clean.length === 20) {
       return {
         tipo: "BILLETE",
+        subtipo: "ESPECIAL",
+        sorteo: clean.substring(0, 4),
+        serie: clean.substring(4, 6),
+        numero: clean.substring(6, 10),
+        folio: clean.substring(10, 12),
+        control: clean.substring(12, 16),
+        fraccion: clean.substring(16, 20),
+        raw: clean,
+      };
+    }
+
+    // BILLETE estándar — 19 dígitos
+    if (clean.length === 19) {
+      return {
+        tipo: "BILLETE",
+        subtipo: "ESTANDAR",
         sorteo: clean.substring(0, 4),
         serie: clean.substring(4, 6),
         numero: clean.substring(6, 10),
@@ -2315,8 +2335,9 @@ function ResultadosScreen({ initTab="resultados" }) {
         raw: clean,
       };
     }
+
+    // CHANCE — 16 dígitos
     if (clean.length === 16) {
-      // CHANCE — 16 dígitos
       return {
         tipo: "CHANCE",
         sorteo: clean.substring(0, 4),
@@ -2327,6 +2348,17 @@ function ResultadosScreen({ initTab="resultados" }) {
         raw: clean,
       };
     }
+
+    // Fallback: si el código tiene al menos 4 dígitos, extraer primer sorteo
+    if (clean.length >= 4) {
+      return {
+        tipo: "DESCONOCIDO",
+        sorteo: clean.substring(0, 4),
+        numero: clean.length >= 10 ? clean.substring(6, 10) : clean.substring(0, 4),
+        raw: clean,
+      };
+    }
+
     return null;
   };
 
@@ -2341,9 +2373,44 @@ function ResultadosScreen({ initTab="resultados" }) {
 
     let mejorMatch = null;
 
-    for (const sorteo of SORTEOS_RECIENTES) {
-      // Para BILLETE → comparar 4 cifras del número completo
-      // Para CHANCE → comparar 2 cifras (últimas 2 del premio)
+    // Buscar primero en SORTEOS_RECIENTES (datos completos con colores/estilos)
+    // Luego en HISTORIAL (convertido al mismo formato)
+    const HISTORIAL_COMO_SORTEOS = HISTORIAL.map(h => {
+      const base = SORTEOS_RECIENTES.find(s => s.tipo === h.tipo) || SORTEOS_RECIENTES[0];
+      return {
+        tipo: h.tipo,
+        icon: base.icon,
+        color: base.color,
+        bg: base.bg,
+        border: base.border,
+        sorteoN: h.sorteoN,
+        fecha: h.fecha,
+        premios: h.premios.map(p => ({
+          pos: p.pos === "1er" ? "1er Premio" : p.pos === "2do" ? "2do Premio" : p.pos === "3er" ? "3er Premio" : p.pos,
+          num: p.num,
+          letras: p.letras || "",
+          serie: p.serie || "",
+          folio: p.folio || "",
+        })),
+        premioMayor: base.premioMayor,
+        frecuencia: base.frecuencia,
+      };
+    });
+
+    // Si el billete tiene sorteoN específico, priorizar ese sorteo
+    let fuentesBusqueda;
+    if (decoded?.sorteo) {
+      const exacto = [...SORTEOS_RECIENTES, ...HISTORIAL_COMO_SORTEOS].find(s => s.sorteoN === decoded.sorteo);
+      if (exacto) {
+        fuentesBusqueda = [exacto];
+      } else {
+        fuentesBusqueda = [...SORTEOS_RECIENTES, ...HISTORIAL_COMO_SORTEOS];
+      }
+    } else {
+      fuentesBusqueda = [...SORTEOS_RECIENTES, ...HISTORIAL_COMO_SORTEOS];
+    }
+
+    for (const sorteo of fuentesBusqueda) {
       const esChance = decoded?.tipo === "CHANCE" || (!decoded && numero.length === 2);
 
       for (let i = 0; i < sorteo.premios.length; i++) {
@@ -2355,24 +2422,21 @@ function ResultadosScreen({ initTab="resultados" }) {
         let montoPremio = 0;
 
         if (esChance) {
-          // CHANCE: aciertas si las 2 últimas cifras coinciden
           const ult2 = premioNum.slice(-2).padStart(2, "0");
           const numN = numero.slice(-2).padStart(2, "0");
           if (ult2 === numN) {
             match = true;
             tipoPremio = `${p.pos} (Chance)`;
-            if (i === 0) montoPremio = 14; // 1er premio: $14 por dólar
-            else if (i === 1) montoPremio = 3; // 2do premio: $3
-            else if (i === 2) montoPremio = 2; // 3er premio: $2
+            if (i === 0) montoPremio = 14;
+            else if (i === 1) montoPremio = 3;
+            else if (i === 2) montoPremio = 2;
           }
         } else {
-          // BILLETE: 4 cifras
           if (premioNum === numero) {
             match = true;
-            // Si además coinciden serie y folio → premio mayor
             if (decoded?.serie === p.serie && decoded?.folio === p.folio) {
               tipoPremio = `${p.pos} con Serie y Folio`;
-              if (i === 0) montoPremio = 2000; // Premio mayor por fracción
+              if (i === 0) montoPremio = 2000;
               else if (i === 1) montoPremio = 600;
               else montoPremio = 300;
             } else {
@@ -2746,9 +2810,10 @@ function ResultadosScreen({ initTab="resultados" }) {
             <div style={{background:"rgba(59,158,255,.05)",border:"1px solid rgba(59,158,255,.18)",borderRadius:11,padding:"11px 13px",marginTop:10}}>
               <div style={{fontSize:10,fontWeight:800,color:"var(--blue)",letterSpacing:.8,marginBottom:6}}>📖 FORMATOS DE CÓDIGO</div>
               <div style={{fontSize:10,color:"var(--muted)",lineHeight:1.6}}>
-                • <strong style={{color:"var(--text)"}}>BILLETE</strong> (19 dígitos): Sorteo · Serie · Número · Folio · Control · Fracción<br/>
-                • <strong style={{color:"var(--text)"}}>CHANCE</strong> (16 dígitos): Sorteo · Serie · Número · Folio · Control<br/>
-                • <strong style={{color:"var(--text)"}}>NÚMERO CORTO</strong> (2 ó 4 dígitos): compara contra sorteos recientes
+                • <strong style={{color:"var(--text)"}}>CHANCE</strong> (16 dígitos)<br/>
+                • <strong style={{color:"var(--text)"}}>BILLETE</strong> estándar (19 dígitos)<br/>
+                • <strong style={{color:"var(--text)"}}>BILLETE ESPECIAL</strong> (20 dígitos) — Sorteo de Oro, Gordito<br/>
+                • <strong style={{color:"var(--text)"}}>NÚMERO CORTO</strong> (2 ó 4 dígitos)
               </div>
             </div>
           </>
@@ -2810,25 +2875,72 @@ function ResultadosScreen({ initTab="resultados" }) {
             {/* Detalle del sorteo que está siendo consultado (SIEMPRE visible) */}
             {(() => {
               // Determinar QUÉ sorteo mostrar:
-              // 1) Si ganó → el sorteo donde ganó
-              // 2) Si escaneó billete/chance → el sorteo más reciente del tipo correspondiente
-              // 3) Si ingresó número corto → el sorteo más reciente disponible
+              // 1) Si ganó → el sorteo donde ganó (match exacto)
+              // 2) Si escaneó billete/chance → buscar el sorteoN exacto en registros
+              // 3) Si no hay match exacto → mostrar mensaje de "sorteo no disponible"
               let sorteoMostrar = null;
               let posicionGanadora = -1;
+              let esSorteoNoDisponible = false;
+              let sorteoNumeroSolicitado = null;
 
               if (verifResult.premio) {
                 sorteoMostrar = verifResult.premio.sorteo;
                 posicionGanadora = verifResult.premio.posicion;
-              } else if (verifResult.decoded) {
-                // Para BILLETE: buscar Dominical/Miercolito/Extraordinaria que coincida con el sorteoN, o el más reciente
-                // Para CHANCE: buscar sorteo que coincida, o el más reciente
-                const sorteoN = verifResult.decoded.sorteo;
-                sorteoMostrar =
-                  SORTEOS_RECIENTES.find(s => s.sorteoN === sorteoN) ||
-                  SORTEOS_RECIENTES[0];
+              } else if (verifResult.decoded && verifResult.decoded.sorteo) {
+                sorteoNumeroSolicitado = verifResult.decoded.sorteo;
+                // Buscar primero en sorteos recientes
+                sorteoMostrar = SORTEOS_RECIENTES.find(s => s.sorteoN === sorteoNumeroSolicitado);
+
+                // Si no está en recientes, buscar en HISTORIAL
+                if (!sorteoMostrar) {
+                  const histMatch = HISTORIAL.find(h => h.sorteoN === sorteoNumeroSolicitado);
+                  if (histMatch) {
+                    const base = SORTEOS_RECIENTES.find(s => s.tipo === histMatch.tipo) || SORTEOS_RECIENTES[0];
+                    sorteoMostrar = {
+                      tipo: histMatch.tipo,
+                      icon: base.icon,
+                      color: base.color,
+                      bg: base.bg,
+                      border: base.border,
+                      sorteoN: histMatch.sorteoN,
+                      fecha: histMatch.fecha,
+                      premios: histMatch.premios.map(p => ({
+                        pos: p.pos === "1er" ? "1er Premio" : p.pos === "2do" ? "2do Premio" : p.pos === "3er" ? "3er Premio" : p.pos,
+                        num: p.num,
+                        letras: p.letras || "",
+                        serie: p.serie || "",
+                        folio: p.folio || "",
+                      })),
+                      premioMayor: base.premioMayor,
+                      frecuencia: base.frecuencia,
+                    };
+                  } else {
+                    esSorteoNoDisponible = true;
+                  }
+                }
               } else {
                 // Número manual sin estructura decoded → sorteo más reciente
                 sorteoMostrar = SORTEOS_RECIENTES[0];
+              }
+
+              // Caso: sorteo solicitado no está en registros
+              if (esSorteoNoDisponible) {
+                return (
+                  <div style={{background:"rgba(59,158,255,.07)",border:"1px solid rgba(59,158,255,.25)",borderRadius:14,padding:"16px",marginBottom:12,textAlign:"center"}}>
+                    <div style={{fontSize:32,marginBottom:6}}>📭</div>
+                    <div style={{fontSize:13,fontWeight:800,color:"var(--blue)",letterSpacing:.8,marginBottom:6}}>
+                      SORTEO Nº {sorteoNumeroSolicitado}
+                    </div>
+                    <div style={{fontSize:12,color:"var(--muted)",lineHeight:1.6,marginBottom:12}}>
+                      No tenemos los resultados de este sorteo en nuestros registros recientes.
+                      <br/>Verifica en el sitio oficial:
+                    </div>
+                    <a href="https://www.lnb.gob.pa" target="_blank" rel="noopener noreferrer"
+                      style={{display:"inline-block",padding:"10px 18px",background:"rgba(59,158,255,.15)",border:"1px solid rgba(59,158,255,.4)",borderRadius:10,color:"var(--blue)",fontSize:12,fontWeight:700,textDecoration:"none"}}>
+                      🌐 lnb.gob.pa
+                    </a>
+                  </div>
+                );
               }
 
               if (!sorteoMostrar) return null;
