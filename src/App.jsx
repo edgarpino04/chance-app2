@@ -3068,7 +3068,14 @@ function SuerteScreen() {
       }
 
       if (!resp.ok) {
-        throw new Error(`Error ${resp.status}: ${resp.statusText}`);
+        // Si el servidor devuelve cualquier error, dar mensaje amigable
+        const errData = await resp.json().catch(() => ({}));
+        if (resp.status === 503 || resp.status === 429) {
+          throw new Error(
+            "El servidor de IA está muy ocupado ahora mismo. Espera unos segundos y vuelve a intentar."
+          );
+        }
+        throw new Error(errData.error || `Error ${resp.status}. Intenta de nuevo en un momento.`);
       }
 
       const data = await resp.json();
