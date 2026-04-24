@@ -3032,7 +3032,7 @@ function SuerteScreen() {
     setSuenoResult(null);
 
     try {
-      const resp = await fetch("/.netlify/functions/analizar-sueno", {
+      const resp = await fetch("/api/analizar-sueno", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ texto: suenoText })
