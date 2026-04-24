@@ -25,7 +25,16 @@ function ChanceLogo({ height=48, style={} }) {
 /* ═══════════════════════════════════════════════════════
    DATOS REALES — LNB.GOB.PA  (extraídos 06 Apr 2026)
 ═══════════════════════════════════════════════════════ */
-const SORTEOS_RECIENTES = [
+// ═══════════════════════════════════════════════════════════════════════
+// CONFIGURACIÓN DEL AUTO-UPDATER
+// El Worker "chance-updater" actualiza los sorteos automáticamente
+// Dom/Mié/Vie 4-6 PM Panamá (hora de sorteos LNB)
+// Si no está configurado, se usan los datos hardcoded como fallback
+// ═══════════════════════════════════════════════════════════════════════
+const UPDATER_URL = "https://chance-updater.edgarpino-d1e.workers.dev"; // ⚠️ AJUSTAR AL DESPLEGAR EL WORKER
+
+// Datos seed (fallback si el Worker no responde)
+const SORTEOS_RECIENTES_SEED = [
   {
     tipo: "MIERCOLITO", icon: "⚡", color: "#3B9EFF", bg: "rgba(59,158,255,.1)", border: "rgba(59,158,255,.28)",
     sorteoN: "3061", fecha: "22 de abril de 2026",
@@ -75,6 +84,10 @@ const SORTEOS_RECIENTES = [
     frecuencia: "Último viernes del mes",
   },
 ];
+
+// Variable MUTABLE que usa el resto de la app
+// Por defecto usa los datos seed, pero se actualiza con los datos del Worker al cargar
+let SORTEOS_RECIENTES = [...SORTEOS_RECIENTES_SEED];
 
 /* Vendedores con inventario */
 const VENDORS = [
@@ -1860,7 +1873,8 @@ function HistorialScreen({ nav, orders=[], onClientApprove, onClientReject, onPr
 
 // Historial completo basado en datos oficiales lnb.gob.pa
 // mes: 1-12, anio: número
-const HISTORIAL = [
+// Se actualiza automáticamente desde el Worker updater al cargar la app
+const HISTORIAL_SEED = [
   // ══════ 2026 ══════
   // ══════ 2026 ══════ — Fuente: laestrella.com.pa, telemetro.com, elcomercio.pe (oficiales)
   // Numeración basada en billete real SORTEO 5542 = 8 Mar 2026 (Día de la Mujer)
@@ -2164,6 +2178,89 @@ const HISTORIAL = [
   { tipo:"MIERCOLITO",  sorteoN:"2332", fecha:"29 Jun 2016", mes:6, anio:2016,
     premios:[{pos:"1er",num:"0587",letras:"ABCD",serie:"6",folio:"8"},{pos:"2do",num:"9274"},{pos:"3er",num:"3051"}] },
 ];
+
+// Variable MUTABLE que usa el resto de la app
+// Por defecto tiene los datos seed, se enriquece con datos del Worker al cargar
+let HISTORIAL = [...HISTORIAL_SEED];
+
+// ═══════════════════════════════════════════════════════════════════════
+// FUNCIÓN para cargar sorteos actualizados del Worker
+// Se llama una vez al iniciar la app desde ChanceRoot
+// ═══════════════════════════════════════════════════════════════════════
+async function cargarSorteosAutomaticos() {
+  if (!UPDATER_URL || UPDATER_URL.includes("AJUSTAR")) return false;
+  try {
+    const response = await fetch(`${UPDATER_URL}/sorteos`, {
+      method: "GET",
+      signal: AbortSignal.timeout(5000) // 5 seg timeout
+    });
+    if (!response.ok) return false;
+    const data = await response.json();
+
+    // Actualizar SORTEOS_RECIENTES si hay datos del Worker
+    if (Array.isArray(data.recientes) && data.recientes.length > 0) {
+      // Convertir formato Worker → formato UI
+      const mapTipoColor = {
+        DOMINICAL: { icon: "🌟", color: "#F4C430", bg: "rgba(244,196,48,.1)", border: "rgba(244,196,48,.28)", premioMayor: "$100,000", frecuencia: "Cada domingo" },
+        MIERCOLITO: { icon: "⚡", color: "#3B9EFF", bg: "rgba(59,158,255,.1)", border: "rgba(59,158,255,.28)", premioMayor: "$100,000", frecuencia: "Cada miércoles" },
+        GORDITO: { icon: "🍀", color: "#00D68F", bg: "rgba(0,214,143,.1)", border: "rgba(0,214,143,.28)", premioMayor: "$1,004,000", frecuencia: "Último viernes del mes" },
+        EXTRAORDINARIA: { icon: "💎", color: "#A78BFA", bg: "rgba(167,139,250,.1)", border: "rgba(167,139,250,.28)", premioMayor: "$1,000,000", frecuencia: "Fecha especial" },
+      };
+
+      SORTEOS_RECIENTES.length = 0; // limpiar
+      for (const s of data.recientes) {
+        const style = mapTipoColor[s.tipo] || mapTipoColor.DOMINICAL;
+        // Convertir fecha "22 Abr 2026" → "22 de abril de 2026"
+        const fechaLarga = convertirFechaLarga(s.fecha);
+        SORTEOS_RECIENTES.push({
+          tipo: s.tipo,
+          icon: style.icon,
+          color: style.color,
+          bg: style.bg,
+          border: style.border,
+          sorteoN: s.sorteoN,
+          fecha: fechaLarga,
+          premios: s.premios.map(p => ({
+            pos: p.pos === "1er" ? "1er Premio" : p.pos === "2do" ? "2do Premio" : p.pos === "3er" ? "3er Premio" : p.pos,
+            num: p.num,
+            letras: p.letras || "",
+            serie: p.serie || "",
+            folio: p.folio || "",
+          })),
+          premioMayor: style.premioMayor,
+          proximoISO: null,
+          frecuencia: style.frecuencia,
+        });
+      }
+    }
+
+    // Agregar sorteos nuevos al HISTORIAL (sin duplicar)
+    if (Array.isArray(data.historial)) {
+      const existentes = new Set(HISTORIAL.map(h => `${h.tipo}-${h.sorteoN}`));
+      for (const s of data.historial) {
+        const key = `${s.tipo}-${s.sorteoN}`;
+        if (!existentes.has(key)) {
+          HISTORIAL.unshift(s); // agregar al inicio (más reciente)
+          existentes.add(key);
+        }
+      }
+    }
+
+    console.log(`✅ Sorteos actualizados automáticamente desde ${UPDATER_URL}`);
+    return true;
+  } catch (err) {
+    console.warn("No se pudieron cargar sorteos automáticos:", err.message);
+    return false;
+  }
+}
+
+function convertirFechaLarga(fechaCorta) {
+  // "22 Abr 2026" → "22 de abril de 2026"
+  const meses = { Ene:"enero", Feb:"febrero", Mar:"marzo", Abr:"abril", May:"mayo", Jun:"junio", Jul:"julio", Ago:"agosto", Sep:"septiembre", Oct:"octubre", Nov:"noviembre", Dic:"diciembre" };
+  const m = String(fechaCorta).match(/(\d+)\s+(\w+)\s+(\d+)/);
+  if (!m) return fechaCorta;
+  return `${parseInt(m[1])} de ${meses[m[2]] || m[2].toLowerCase()} de ${m[3]}`;
+}
 
 /* ── Sub-componente Historial (necesita sus propios hooks) ── */
 function HistorialTab({ tipoF, setTipoF, cols }) {
@@ -7179,6 +7276,9 @@ export default function ChanceRoot() {
   // Cargar estado persistido al iniciar
   useEffect(() => {
     (async () => {
+      // Intentar actualizar sorteos desde el Worker (no bloquea si falla)
+      cargarSorteosAutomaticos();
+
       try {
         const [ordersR, billetesR, chancesR] = await Promise.all([
           window.storage.get("shared_orders_db"),
