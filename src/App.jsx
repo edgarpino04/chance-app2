@@ -2713,7 +2713,7 @@ function HistorialTab({ tipoF, setTipoF, cols }) {
     {/* Filtro tipo */}
     <div style={{display:"flex",gap:5,overflowX:"auto",paddingBottom:4,scrollbarWidth:"none",marginBottom:8}}>
       <button className={`chip ${tipoF==="TODOS"?"on":""}`} style={{flexShrink:0}} onClick={()=>setTipoF("TODOS")}>Todos</button>
-      {Object.entries(TIPO_META).map(([k,v])=>(
+      {Object.entries(TIPO_META).filter(([k])=>k!=="ZODIACAL" && k!=="DEFAULT").map(([k,v])=>(
         <button key={k} className={`chip ${tipoF===k?"on":""}`} style={{flexShrink:0}} onClick={()=>setTipoF(k)}>
           {v.icon} {k}
         </button>
