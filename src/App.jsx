@@ -1962,7 +1962,7 @@ const HISTORIAL_SEED = [
     premios:[{pos:"1er",num:"6369",letras:"CADD",serie:"16",folio:"9"},{pos:"2do",num:"0846"},{pos:"3er",num:"4063"}] },
   { tipo:"DOMINICAL",   sorteoN:"5532", fecha:"28 Dic 2025", mes:12, anio:2025,
     premios:[{pos:"1er",num:"5905",letras:"BBBD",serie:"21",folio:"9"},{pos:"2do",num:"2861"},{pos:"3er",num:"4691"}] },
-  { tipo:"ZODIACAL",    sorteoN:"406B", fecha:"26 Dic 2025", mes:12, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"406B", fecha:"26 Dic 2025", mes:12, anio:2025,
     premios:[{pos:"1er",num:"7792",letras:"ABAA",serie:"1",folio:"19"},{pos:"2do",num:"10"},{pos:"3er",num:"77"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3044", fecha:"24 Dic 2025", mes:12, anio:2025,
     premios:[{pos:"1er",num:"8937",letras:"BBDD",serie:"17",folio:"10"},{pos:"2do",num:"9611"},{pos:"3er",num:"5042"}] },
@@ -1981,7 +1981,7 @@ const HISTORIAL_SEED = [
   // NOVIEMBRE 2025
   { tipo:"DOMINICAL",   sorteoN:"5528", fecha:"30 Nov 2025", mes:11, anio:2025,
     premios:[{pos:"1er",num:"1124",letras:"DCCD",serie:"2",folio:"6"},{pos:"2do",num:"5512"},{pos:"3er",num:"6906"}] },
-  { tipo:"ZODIACAL",    sorteoN:"406A", fecha:"21 Nov 2025", mes:11, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"406A", fecha:"21 Nov 2025", mes:11, anio:2025,
     premios:[{pos:"1er",num:"2240",letras:"DABC",serie:"2",folio:"4"},{pos:"2do",num:"58"},{pos:"3er",num:"33"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3040", fecha:"26 Nov 2025", mes:11, anio:2025,
     premios:[{pos:"1er",num:"1783",letras:"CBBC",serie:"2",folio:"10"},{pos:"2do",num:"7836"},{pos:"3er",num:"5643"}] },
@@ -2000,7 +2000,7 @@ const HISTORIAL_SEED = [
   { tipo:"DOMINICAL",   sorteoN:"5524", fecha:"02 Nov 2025", mes:11, anio:2025,
     premios:[{pos:"1er",num:"3052",letras:"DACC",serie:"22",folio:"8"},{pos:"2do",num:"5196"},{pos:"3er",num:"3538"}] },
   // OCTUBRE 2025
-  { tipo:"ZODIACAL",    sorteoN:"406",  fecha:"31 Oct 2025", mes:10, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"406",  fecha:"31 Oct 2025", mes:10, anio:2025,
     premios:[{pos:"1er",num:"4433",letras:"CCCC",serie:"7",folio:"21"},{pos:"2do",num:"34"},{pos:"3er",num:"31"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3036", fecha:"29 Oct 2025", mes:10, anio:2025,
     premios:[{pos:"1er",num:"0096",letras:"AABA",serie:"9",folio:"9"},{pos:"2do",num:"3425"},{pos:"3er",num:"3709"}] },
@@ -2023,7 +2023,7 @@ const HISTORIAL_SEED = [
   // SEPTIEMBRE 2025
   { tipo:"DOMINICAL",   sorteoN:"5519", fecha:"28 Sep 2025", mes:9, anio:2025,
     premios:[{pos:"1er",num:"5511",letras:"DDBA",serie:"10",folio:"9"},{pos:"2do",num:"5823"},{pos:"3er",num:"5823"}] },
-  { tipo:"ZODIACAL",    sorteoN:"405A", fecha:"26 Sep 2025", mes:9, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"405A", fecha:"26 Sep 2025", mes:9, anio:2025,
     premios:[{pos:"1er",num:"2877",letras:"BDBA",serie:"2",folio:"25"},{pos:"2do",num:"13"},{pos:"3er",num:"01"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3031", fecha:"24 Sep 2025", mes:9, anio:2025,
     premios:[{pos:"1er",num:"3704",letras:"CCAA",serie:"11",folio:"11"},{pos:"2do",num:"6336"},{pos:"3er",num:"3666"}] },
@@ -2042,7 +2042,7 @@ const HISTORIAL_SEED = [
   // AGOSTO 2025
   { tipo:"DOMINICAL",   sorteoN:"5515", fecha:"31 Ago 2025", mes:8, anio:2025,
     premios:[{pos:"1er",num:"3471",letras:"BDCD",serie:"7",folio:"6"},{pos:"2do",num:"1174"},{pos:"3er",num:"0745"}] },
-  { tipo:"ZODIACAL",    sorteoN:"405",  fecha:"29 Ago 2025", mes:8, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"405",  fecha:"29 Ago 2025", mes:8, anio:2025,
     premios:[{pos:"1er",num:"1353",letras:"BDBA",serie:"4",folio:"21"},{pos:"2do",num:"89"},{pos:"3er",num:"17"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3027", fecha:"27 Ago 2025", mes:8, anio:2025,
     premios:[{pos:"1er",num:"1391",letras:"DDBA",serie:"12",folio:"6"},{pos:"2do",num:"3561"},{pos:"3er",num:"8225"}] },
@@ -2065,7 +2065,7 @@ const HISTORIAL_SEED = [
     premios:[{pos:"1er",num:"4641",letras:"CAAC",serie:"11",folio:"1"},{pos:"2do",num:"9081"},{pos:"3er",num:"4102"}] },
   { tipo:"DOMINICAL",   sorteoN:"5510", fecha:"27 Jul 2025", mes:7, anio:2025,
     premios:[{pos:"1er",num:"7962",letras:"ABBD",serie:"15",folio:"15"},{pos:"2do",num:"8224"},{pos:"3er",num:"6765"}] },
-  { tipo:"ZODIACAL",    sorteoN:"404",  fecha:"25 Jul 2025", mes:7, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"404",  fecha:"25 Jul 2025", mes:7, anio:2025,
     premios:[{pos:"1er",num:"7673",letras:"ADCD",serie:"6",folio:"16"},{pos:"2do",num:"26"},{pos:"3er",num:"97"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3022", fecha:"23 Jul 2025", mes:7, anio:2025,
     premios:[{pos:"1er",num:"9447",letras:"CBAB",serie:"9",folio:"8"},{pos:"2do",num:"2630"},{pos:"3er",num:"1725"}] },
@@ -2084,7 +2084,7 @@ const HISTORIAL_SEED = [
   // JUNIO 2025
   { tipo:"DOMINICAL",   sorteoN:"5506", fecha:"29 Jun 2025", mes:6, anio:2025,
     premios:[{pos:"1er",num:"4653",letras:"CCDA",serie:"14",folio:"15"},{pos:"2do",num:"0235"},{pos:"3er",num:"2751"}] },
-  { tipo:"ZODIACAL",    sorteoN:"403",  fecha:"27 Jun 2025", mes:6, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"403",  fecha:"27 Jun 2025", mes:6, anio:2025,
     premios:[{pos:"1er",num:"6540",letras:"ACAD",serie:"4",folio:"10"},{pos:"2do",num:"20"},{pos:"3er",num:"77"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3018", fecha:"25 Jun 2025", mes:6, anio:2025,
     premios:[{pos:"1er",num:"5212",letras:"BBAD",serie:"1",folio:"10"},{pos:"2do",num:"6503"},{pos:"3er",num:"7561"}] },
@@ -2103,7 +2103,7 @@ const HISTORIAL_SEED = [
   { tipo:"DOMINICAL",   sorteoN:"5502", fecha:"01 Jun 2025", mes:6, anio:2025,
     premios:[{pos:"1er",num:"0350",letras:"CDDD",serie:"10",folio:"5"},{pos:"2do",num:"3466"},{pos:"3er",num:"9854"}] },
   // MAYO 2025
-  { tipo:"ZODIACAL",    sorteoN:"402A", fecha:"30 May 2025", mes:5, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"402A", fecha:"30 May 2025", mes:5, anio:2025,
     premios:[{pos:"1er",num:"3966",letras:"ADDB",serie:"8",folio:"14"},{pos:"2do",num:"51"},{pos:"3er",num:"13"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3014", fecha:"28 May 2025", mes:5, anio:2025,
     premios:[{pos:"1er",num:"6093",letras:"DCAB",serie:"6",folio:"12"},{pos:"2do",num:"9752"},{pos:"3er",num:"6091"}] },
@@ -2121,7 +2121,7 @@ const HISTORIAL_SEED = [
     premios:[{pos:"1er",num:"8207",letras:"DDBB",serie:"11",folio:"10"},{pos:"2do",num:"3415"},{pos:"3er",num:"6838"}] },
   { tipo:"DOMINICAL",   sorteoN:"5498", fecha:"04 May 2025", mes:5, anio:2025,
     premios:[{pos:"1er",num:"8798",letras:"DABA",serie:"13",folio:"1"},{pos:"2do",num:"1406"},{pos:"3er",num:"9784"}] },
-  { tipo:"ZODIACAL",    sorteoN:"402",  fecha:"02 May 2025", mes:5, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"402",  fecha:"02 May 2025", mes:5, anio:2025,
     premios:[{pos:"1er",num:"8040",letras:"CBBB",serie:"4",folio:"19"},{pos:"2do",num:"80"},{pos:"3er",num:"35"}] },
   // ABRIL 2025
   { tipo:"MIERCOLITO",  sorteoN:"3010", fecha:"30 Abr 2025", mes:4, anio:2025,
@@ -2145,7 +2145,7 @@ const HISTORIAL_SEED = [
   // MARZO 2025
   { tipo:"DOMINICAL",   sorteoN:"5493", fecha:"30 Mar 2025", mes:3, anio:2025,
     premios:[{pos:"1er",num:"6423",letras:"CADA",serie:"19",folio:"15"},{pos:"2do",num:"4341"},{pos:"3er",num:"3379"}] },
-  { tipo:"ZODIACAL",    sorteoN:"401A", fecha:"28 Mar 2025", mes:3, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"401A", fecha:"28 Mar 2025", mes:3, anio:2025,
     premios:[{pos:"1er",num:"1475",letras:"DCAA",serie:"1",folio:"24"},{pos:"2do",num:"76"},{pos:"3er",num:"13"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3005", fecha:"26 Mar 2025", mes:3, anio:2025,
     premios:[{pos:"1er",num:"9903",letras:"CBCA",serie:"3",folio:"8"},{pos:"2do",num:"0164"},{pos:"3er",num:"0581"}] },
@@ -2164,7 +2164,7 @@ const HISTORIAL_SEED = [
   { tipo:"DOMINICAL",   sorteoN:"5489", fecha:"02 Mar 2025", mes:3, anio:2025,
     premios:[{pos:"1er",num:"0817",letras:"CCBC",serie:"27",folio:"8"},{pos:"2do",num:"6197"},{pos:"3er",num:"6414"}] },
   // FEBRERO 2025
-  { tipo:"ZODIACAL",    sorteoN:"401",  fecha:"28 Feb 2025", mes:2, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"401",  fecha:"28 Feb 2025", mes:2, anio:2025,
     premios:[{pos:"1er",num:"0028",letras:"DBDB",serie:"9",folio:"18"},{pos:"2do",num:"21"},{pos:"3er",num:"56"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3001", fecha:"26 Feb 2025", mes:2, anio:2025,
     premios:[{pos:"1er",num:"8443",letras:"BCAA",serie:"6",folio:"6"},{pos:"2do",num:"5376"},{pos:"3er",num:"5554"}] },
@@ -2183,7 +2183,7 @@ const HISTORIAL_SEED = [
   { tipo:"DOMINICAL",   sorteoN:"5485", fecha:"02 Feb 2025", mes:2, anio:2025,
     premios:[{pos:"1er",num:"8287",letras:"DCDC",serie:"26",folio:"6"},{pos:"2do",num:"5646"},{pos:"3er",num:"9490"}] },
   // ENERO 2025
-  { tipo:"ZODIACAL",    sorteoN:"400",  fecha:"31 Ene 2025", mes:1, anio:2025,
+  { tipo:"GORDITO"   ,    sorteoN:"400",  fecha:"31 Ene 2025", mes:1, anio:2025,
     premios:[{pos:"1er",num:"7459",letras:"CDDA",serie:"9",folio:"8"},{pos:"2do",num:"55"},{pos:"3er",num:"39"}] },
   { tipo:"MIERCOLITO",  sorteoN:"2997", fecha:"29 Ene 2025", mes:1, anio:2025,
     premios:[{pos:"1er",num:"5914",letras:"BBDB",serie:"20",folio:"4"},{pos:"2do",num:"8702"},{pos:"3er",num:"5979"}] },
@@ -2205,7 +2205,7 @@ const HISTORIAL_SEED = [
     premios:[{pos:"1er",num:"4782",letras:"DABD",serie:"18",folio:"15"},{pos:"2do",num:"3482"},{pos:"3er",num:"4310"}] },
   // ══════ 2024 ══════ — Fuente: suerteloteria.com (oficial)
   // DICIEMBRE 2024
-  { tipo:"ZODIACAL",    sorteoN:"399",  fecha:"27 Dic 2024", mes:12, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"399",  fecha:"27 Dic 2024", mes:12, anio:2024,
     premios:[{pos:"1er",num:"5048",letras:"AADC",serie:"6",folio:"16"},{pos:"2do",num:"58"},{pos:"3er",num:"14"}] },
   { tipo:"DOMINICAL",   sorteoN:"5480", fecha:"29 Dic 2024", mes:12, anio:2024,
     premios:[{pos:"1er",num:"8556",letras:"BACC",serie:"15",folio:"12"},{pos:"2do",num:"7529"},{pos:"3er",num:"9348"}] },
@@ -2226,7 +2226,7 @@ const HISTORIAL_SEED = [
   { tipo:"DOMINICAL",   sorteoN:"5476", fecha:"01 Dic 2024", mes:12, anio:2024,
     premios:[{pos:"1er",num:"0515",letras:"BDDA",serie:"28",folio:"5"},{pos:"2do",num:"0755"},{pos:"3er",num:"6514"}] },
   // NOVIEMBRE 2024
-  { tipo:"ZODIACAL",    sorteoN:"398",  fecha:"29 Nov 2024", mes:11, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"398",  fecha:"29 Nov 2024", mes:11, anio:2024,
     premios:[{pos:"1er",num:"4892",letras:"BBDA",serie:"2",folio:"20"},{pos:"2do",num:"18"},{pos:"3er",num:"92"}] },
   { tipo:"MIERCOLITO",  sorteoN:"2988", fecha:"27 Nov 2024", mes:11, anio:2024,
     premios:[{pos:"1er",num:"2991",letras:"DBCA",serie:"17",folio:"9"},{pos:"2do",num:"5179"},{pos:"3er",num:"8395"}] },
@@ -2249,7 +2249,7 @@ const HISTORIAL_SEED = [
     premios:[{pos:"1er",num:"7533",letras:"CCCD",serie:"24",folio:"10"},{pos:"2do",num:"2978"},{pos:"3er",num:"7180"}] },
   { tipo:"DOMINICAL",   sorteoN:"5471", fecha:"27 Oct 2024", mes:10, anio:2024,
     premios:[{pos:"1er",num:"2576",letras:"DBBD",serie:"5",folio:"1"},{pos:"2do",num:"4608"},{pos:"3er",num:"3726"}] },
-  { tipo:"ZODIACAL",    sorteoN:"397",  fecha:"25 Oct 2024", mes:10, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"397",  fecha:"25 Oct 2024", mes:10, anio:2024,
     premios:[{pos:"1er",num:"3756",letras:"DADC",serie:"5",folio:"20"},{pos:"2do",num:"26"},{pos:"3er",num:"15"}] },
   { tipo:"MIERCOLITO",  sorteoN:"2983", fecha:"23 Oct 2024", mes:10, anio:2024,
     premios:[{pos:"1er",num:"9239",letras:"CACD",serie:"3",folio:"10"},{pos:"2do",num:"0879"},{pos:"3er",num:"1462"}] },
@@ -2268,7 +2268,7 @@ const HISTORIAL_SEED = [
   // SEPTIEMBRE 2024
   { tipo:"DOMINICAL",   sorteoN:"5467", fecha:"29 Sep 2024", mes:9, anio:2024,
     premios:[{pos:"1er",num:"9016",letras:"DDAC",serie:"27",folio:"11"},{pos:"2do",num:"6287"},{pos:"3er",num:"3231"}] },
-  { tipo:"ZODIACAL",    sorteoN:"396",  fecha:"27 Sep 2024", mes:9, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"396",  fecha:"27 Sep 2024", mes:9, anio:2024,
     premios:[{pos:"1er",num:"0099",letras:"CBAD",serie:"3",folio:"5"},{pos:"2do",num:"95"},{pos:"3er",num:"37"}] },
   { tipo:"MIERCOLITO",  sorteoN:"2979", fecha:"25 Sep 2024", mes:9, anio:2024,
     premios:[{pos:"1er",num:"0436",letras:"BDCC",serie:"22",folio:"8"},{pos:"2do",num:"9347"},{pos:"3er",num:"8880"}] },
@@ -2287,7 +2287,7 @@ const HISTORIAL_SEED = [
   { tipo:"DOMINICAL",   sorteoN:"5463", fecha:"01 Sep 2024", mes:9, anio:2024,
     premios:[{pos:"1er",num:"8509",letras:"BDCD",serie:"18",folio:"2"},{pos:"2do",num:"9008"},{pos:"3er",num:"0319"}] },
   // AGOSTO 2024
-  { tipo:"ZODIACAL",    sorteoN:"395",  fecha:"30 Ago 2024", mes:8, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"395",  fecha:"30 Ago 2024", mes:8, anio:2024,
     premios:[{pos:"1er",num:"5288",letras:"CCCA",serie:"7",folio:"7"},{pos:"2do",num:"78"},{pos:"3er",num:"85"}] },
   { tipo:"MIERCOLITO",  sorteoN:"2975", fecha:"28 Ago 2024", mes:8, anio:2024,
     premios:[{pos:"1er",num:"4091",letras:"CCBA",serie:"4",folio:"9"},{pos:"2do",num:"0689"},{pos:"3er",num:"3653"}] },
@@ -2310,7 +2310,7 @@ const HISTORIAL_SEED = [
     premios:[{pos:"1er",num:"7421",letras:"BCBA",serie:"17",folio:"9"},{pos:"2do",num:"5944"},{pos:"3er",num:"6050"}] },
   { tipo:"DOMINICAL",   sorteoN:"5458", fecha:"28 Jul 2024", mes:7, anio:2024,
     premios:[{pos:"1er",num:"1424",letras:"DBCB",serie:"18",folio:"14"},{pos:"2do",num:"2066"},{pos:"3er",num:"6956"}] },
-  { tipo:"ZODIACAL",    sorteoN:"394",  fecha:"26 Jul 2024", mes:7, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"394",  fecha:"26 Jul 2024", mes:7, anio:2024,
     premios:[{pos:"1er",num:"9294",letras:"DABC",serie:"2",folio:"22"},{pos:"2do",num:"74"},{pos:"3er",num:"27"}] },
   { tipo:"MIERCOLITO",  sorteoN:"2970", fecha:"24 Jul 2024", mes:7, anio:2024,
     premios:[{pos:"1er",num:"0021",letras:"DDDD",serie:"5",folio:"15"},{pos:"2do",num:"0693"},{pos:"3er",num:"3000"}] },
@@ -2329,7 +2329,7 @@ const HISTORIAL_SEED = [
   // JUNIO 2024
   { tipo:"DOMINICAL",   sorteoN:"5454", fecha:"30 Jun 2024", mes:6, anio:2024,
     premios:[{pos:"1er",num:"7203",letras:"CCCC",serie:"9",folio:"10"},{pos:"2do",num:"8286"},{pos:"3er",num:"7308"}] },
-  { tipo:"ZODIACAL",    sorteoN:"393",  fecha:"28 Jun 2024", mes:6, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"393",  fecha:"28 Jun 2024", mes:6, anio:2024,
     premios:[{pos:"1er",num:"5750",letras:"DCCD",serie:"1",folio:"16"},{pos:"2do",num:"37"},{pos:"3er",num:"47"}] },
   { tipo:"MIERCOLITO",  sorteoN:"2966", fecha:"26 Jun 2024", mes:6, anio:2024,
     premios:[{pos:"1er",num:"3272",letras:"CBAB",serie:"16",folio:"5"},{pos:"2do",num:"0340"},{pos:"3er",num:"1745"}] },
@@ -2348,7 +2348,7 @@ const HISTORIAL_SEED = [
   { tipo:"DOMINICAL",   sorteoN:"5450", fecha:"02 Jun 2024", mes:6, anio:2024,
     premios:[{pos:"1er",num:"5350",letras:"ACAA",serie:"13",folio:"5"},{pos:"2do",num:"9051"},{pos:"3er",num:"0984"}] },
   // MAYO 2024
-  { tipo:"ZODIACAL",    sorteoN:"392",  fecha:"31 May 2024", mes:5, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"392",  fecha:"31 May 2024", mes:5, anio:2024,
     premios:[{pos:"1er",num:"7429",letras:"BBBC",serie:"4",folio:"12"},{pos:"2do",num:"41"},{pos:"3er",num:"50"}] },
   { tipo:"MIERCOLITO",  sorteoN:"2962", fecha:"29 May 2024", mes:5, anio:2024,
     premios:[{pos:"1er",num:"4554",letras:"DABA",serie:"9",folio:"15"},{pos:"2do",num:"4716"},{pos:"3er",num:"6194"}] },
@@ -2371,7 +2371,7 @@ const HISTORIAL_SEED = [
   // ABRIL 2024
   { tipo:"DOMINICAL",   sorteoN:"5445", fecha:"28 Abr 2024", mes:4, anio:2024,
     premios:[{pos:"1er",num:"9917",letras:"DBAC",serie:"12",folio:"5"},{pos:"2do",num:"4559"},{pos:"3er",num:"6713"}] },
-  { tipo:"ZODIACAL",    sorteoN:"391",  fecha:"26 Abr 2024", mes:4, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"391",  fecha:"26 Abr 2024", mes:4, anio:2024,
     premios:[{pos:"1er",num:"8641",letras:"BACD",serie:"5",folio:"17"},{pos:"2do",num:"09"},{pos:"3er",num:"46"}] },
   { tipo:"MIERCOLITO",  sorteoN:"2957", fecha:"24 Abr 2024", mes:4, anio:2024,
     premios:[{pos:"1er",num:"8144",letras:"DDBD",serie:"18",folio:"9"},{pos:"2do",num:"7223"},{pos:"3er",num:"8003"}] },
@@ -2390,7 +2390,7 @@ const HISTORIAL_SEED = [
   // MARZO 2024
   { tipo:"DOMINICAL",   sorteoN:"5441", fecha:"31 Mar 2024", mes:3, anio:2024,
     premios:[{pos:"1er",num:"6140",letras:"DBDC",serie:"19",folio:"2"},{pos:"2do",num:"8536"},{pos:"3er",num:"5603"}] },
-  { tipo:"ZODIACAL",    sorteoN:"390",  fecha:"29 Mar 2024", mes:3, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"390",  fecha:"29 Mar 2024", mes:3, anio:2024,
     premios:[{pos:"1er",num:"6920",letras:"DBAD",serie:"7",folio:"23"},{pos:"2do",num:"55"},{pos:"3er",num:"56"}] },
   { tipo:"MIERCOLITO",  sorteoN:"2953", fecha:"27 Mar 2024", mes:3, anio:2024,
     premios:[{pos:"1er",num:"0378",letras:"CCDC",serie:"22",folio:"2"},{pos:"2do",num:"5972"},{pos:"3er",num:"4786"}] },
@@ -2408,7 +2408,7 @@ const HISTORIAL_SEED = [
     premios:[{pos:"1er",num:"7584",letras:"DDBA",serie:"13",folio:"2"},{pos:"2do",num:"2996"},{pos:"3er",num:"0027"}] },
   { tipo:"DOMINICAL",   sorteoN:"5437", fecha:"03 Mar 2024", mes:3, anio:2024,
     premios:[{pos:"1er",num:"5980",letras:"AAAB",serie:"11",folio:"14"},{pos:"2do",num:"9588"},{pos:"3er",num:"0896"}] },
-  { tipo:"ZODIACAL",    sorteoN:"389A", fecha:"01 Mar 2024", mes:3, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"389A", fecha:"01 Mar 2024", mes:3, anio:2024,
     premios:[{pos:"1er",num:"0490",letras:"CACA",serie:"1",folio:"1"},{pos:"2do",num:"84"},{pos:"3er",num:"31"}] },
   // FEBRERO 2024
   { tipo:"MIERCOLITO",  sorteoN:"2949", fecha:"28 Feb 2024", mes:2, anio:2024,
@@ -2432,7 +2432,7 @@ const HISTORIAL_SEED = [
     premios:[{pos:"1er",num:"8924",letras:"CBDB",serie:"23",folio:"2"},{pos:"2do",num:"4397"},{pos:"3er",num:"9886"}] },
   { tipo:"DOMINICAL",   sorteoN:"5432", fecha:"28 Ene 2024", mes:1, anio:2024,
     premios:[{pos:"1er",num:"8746",letras:"BADB",serie:"25",folio:"3"},{pos:"2do",num:"8066"},{pos:"3er",num:"3919"}] },
-  { tipo:"ZODIACAL",    sorteoN:"389",  fecha:"26 Ene 2024", mes:1, anio:2024,
+  { tipo:"GORDITO"   ,    sorteoN:"389",  fecha:"26 Ene 2024", mes:1, anio:2024,
     premios:[{pos:"1er",num:"9999",letras:"CCAA",serie:"9",folio:"16"},{pos:"2do",num:"57"},{pos:"3er",num:"97"}] },
   { tipo:"MIERCOLITO",  sorteoN:"2944", fecha:"24 Ene 2024", mes:1, anio:2024,
     premios:[{pos:"1er",num:"2245",letras:"CAAB",serie:"17",folio:"2"},{pos:"2do",num:"3049"},{pos:"3er",num:"6599"}] },
@@ -2765,7 +2765,7 @@ function HistorialTab({ tipoF, setTipoF, cols }) {
         <div style={{fontSize:11,color:"var(--muted)"}}>Prueba con otro mes, año o tipo</div>
       </div>
     ):filtered.map(h=>{
-      const m=TIPO_META[h.tipo];
+      const m=TIPO_META[h.tipo] || TIPO_META.DEFAULT;
       return (
         <div key={`${h.tipo}-${h.sorteoN}`} className="card" style={{marginBottom:9,borderLeft:`3px solid ${m.color}`}}>
           <div className="row" style={{justifyContent:"space-between",marginBottom:8}}>
@@ -2802,6 +2802,8 @@ const TIPO_META = {
   DOMINICAL:      { icon:"🌟", color:"#F4C430" },
   GORDITO:        { icon:"🍀", color:"#00D68F" },
   EXTRAORDINARIA: { icon:"💎", color:"#A78BFA" },
+  ZODIACAL:       { icon:"🍀", color:"#00D68F" }, // Alias de GORDITO
+  DEFAULT:        { icon:"🎲", color:"#9DB3CC" }, // Fallback para tipos desconocidos
 };
 
 function ResultadosScreen({ initTab="resultados" }) {
