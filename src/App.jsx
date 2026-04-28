@@ -2207,12 +2207,20 @@ async function cargarSorteosAutomaticos() {
         EXTRAORDINARIA: { icon: "💎", color: "#A78BFA", bg: "rgba(167,139,250,.1)", border: "rgba(167,139,250,.28)", premioMayor: "$1,000,000", frecuencia: "Fecha especial" },
       };
 
-      SORTEOS_RECIENTES.length = 0; // limpiar
+      // MEZCLAR: para cada tipo, mantener el más reciente entre Worker y SEED
+      // Esto evita que desaparezca GORDITO y EXTRAORDINARIA cuando el Worker solo devuelve DOMINICAL/MIERCOLITO
+      const recientesPorTipo = {};
+
+      // Primero inicializar con los datos seed (todos los tipos)
+      for (const s of SORTEOS_RECIENTES_SEED) {
+        recientesPorTipo[s.tipo] = s;
+      }
+
+      // Luego sobrescribir con datos del Worker si son más recientes
       for (const s of data.recientes) {
         const style = mapTipoColor[s.tipo] || mapTipoColor.DOMINICAL;
-        // Convertir fecha "22 Abr 2026" → "22 de abril de 2026"
         const fechaLarga = convertirFechaLarga(s.fecha);
-        SORTEOS_RECIENTES.push({
+        const nuevoRecord = {
           tipo: s.tipo,
           icon: style.icon,
           color: style.color,
@@ -2230,7 +2238,20 @@ async function cargarSorteosAutomaticos() {
           premioMayor: style.premioMayor,
           proximoISO: null,
           frecuencia: style.frecuencia,
-        });
+        };
+
+        // Solo sobrescribir si el Worker tiene un sorteoN mayor (más reciente)
+        const seedDelTipo = recientesPorTipo[s.tipo];
+        if (!seedDelTipo || parseInt(s.sorteoN) >= parseInt(seedDelTipo.sorteoN)) {
+          recientesPorTipo[s.tipo] = nuevoRecord;
+        }
+      }
+
+      // Reemplazar el array manteniendo el orden: Miercolito, Dominical, Gordito, Extraordinaria
+      SORTEOS_RECIENTES.length = 0;
+      const ordenTipos = ["MIERCOLITO", "DOMINICAL", "GORDITO", "EXTRAORDINARIA"];
+      for (const tipo of ordenTipos) {
+        if (recientesPorTipo[tipo]) SORTEOS_RECIENTES.push(recientesPorTipo[tipo]);
       }
     }
 
