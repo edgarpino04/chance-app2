@@ -61,14 +61,14 @@ const SORTEOS_RECIENTES_SEED = [
   },
   {
     tipo: "DOMINICAL", icon: "🌟", color: "#F4C430", bg: "rgba(244,196,48,.1)", border: "rgba(244,196,48,.28)",
-    sorteoN: "5547", fecha: "12 de abril de 2026",
+    sorteoN: "5549", fecha: "26 de abril de 2026",
     premios: [
-      { pos: "1er Premio", num: "7964", letras: "", serie: "", folio: "" },
-      { pos: "2do Premio", num: "5211", letras: "", serie: "", folio: "" },
-      { pos: "3er Premio", num: "6713", letras: "", serie: "", folio: "" },
+      { pos: "1er Premio", num: "5144", letras: "BABD", serie: "6", folio: "13" },
+      { pos: "2do Premio", num: "2104", letras: "", serie: "", folio: "" },
+      { pos: "3er Premio", num: "1579", letras: "", serie: "", folio: "" },
     ],
     premioMayor: "$100,000",
-    proximoISO: "2026-04-26T15:00:00",
+    proximoISO: "2026-05-03T15:00:00",
     frecuencia: "Cada domingo",
   },
   {
@@ -1880,6 +1880,8 @@ const HISTORIAL_SEED = [
   // Numeración basada en billete real SORTEO 5542 = 8 Mar 2026 (Día de la Mujer)
   // y Miercolito 3061 = 22 Abr 2026
   // ABR 2026
+  { tipo:"DOMINICAL",   sorteoN:"5549", fecha:"26 Abr 2026", mes:4, anio:2026,
+    premios:[{pos:"1er",num:"5144",letras:"BABD",serie:"6",folio:"13"},{pos:"2do",num:"2104"},{pos:"3er",num:"1579"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3061", fecha:"22 Abr 2026", mes:4, anio:2026,
     premios:[{pos:"1er",num:"9864",letras:"CBBC",serie:"20",folio:"1"},{pos:"2do",num:"1117"},{pos:"3er",num:"1379"}] },
   { tipo:"EXTRAORDINARIA", sorteoN:"5548", fecha:"19 Abr 2026", mes:4, anio:2026,
