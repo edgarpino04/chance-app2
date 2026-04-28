@@ -3548,7 +3548,7 @@ function ResultadosScreen({ initTab="resultados" }) {
    ╚══════════════════════════════════════════════════════════════╝ */
 /* ╔══════════════════════════════════════════════════════════════╗
    ║  PANTALLA MI SUERTE — Sueños (IA Claude) + Estadísticas LNB  ║
-   ║  - Usa Netlify Function como proxy seguro a Anthropic API    ║
+   ║  - Usa Cloudflare Pages Function como proxy seguro a Gemini  ║
    ║  - Si el API falla, muestra error claro al usuario           ║
    ╚══════════════════════════════════════════════════════════════╝ */
 function SuerteScreen() {
@@ -3563,7 +3563,7 @@ function SuerteScreen() {
   // ── ESTADÍSTICAS ──
   const [numSelected, setNumSelected] = useState("07");
 
-  // Llamar al Netlify Function que proxea la API de Claude con prompt Chakatín
+  // Llamar a la Cloudflare Pages Function que proxea Gemini con prompt Chakatín
   const analizarSueno = async () => {
     if (!suenoText.trim()) {
       setSuenoError("Escribe tu sueño o evento primero.");
@@ -3574,7 +3574,7 @@ function SuerteScreen() {
     setSuenoResult(null);
 
     try {
-      const resp = await fetch("/.netlify/functions/analizar-sueno", {
+      const resp = await fetch("/api/analizar-sueno", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ texto: suenoText })
@@ -3583,9 +3583,9 @@ function SuerteScreen() {
       // Diagnóstico por código de respuesta
       if (resp.status === 404) {
         throw new Error(
-          "La Netlify Function no está desplegada. Para que funcione debes: " +
-          "(1) subir el proyecto conectándolo a GitHub, O (2) usar Netlify CLI. " +
-          "Un deploy con drag-and-drop de /dist NO incluye las funciones."
+          "La función de Cloudflare Pages no está desplegada. " +
+          "Verifica que exista el archivo functions/api/analizar-sueno.js en el repositorio de GitHub " +
+          "y que el deploy de Cloudflare Pages haya sido exitoso."
         );
       }
 
@@ -3593,8 +3593,8 @@ function SuerteScreen() {
         const errData = await resp.json().catch(() => ({}));
         if (errData.error && errData.error.includes("API_KEY")) {
           throw new Error(
-            "La variable GEMINI_API_KEY no está configurada en Netlify. " +
-            "Ve a tu sitio → Site configuration → Environment variables → Add a variable."
+            "La variable GEMINI_API_KEY no está configurada en Cloudflare Pages. " +
+            "Ve a tu proyecto → Settings → Environment variables → Add variable."
           );
         }
         throw new Error(errData.error || "Error del servidor");
