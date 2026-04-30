@@ -2198,18 +2198,30 @@ function TrackingScreen({ order }) {
         )}
       </div>
       <div className="card" style={{marginBottom:10}}>
-        <div className="row" style={{justifyContent:"space-between"}}>
+        <div className="row" style={{justifyContent:"space-between",marginBottom:9}}>
           <div className="row" style={{gap:9}}>
             <div style={{width:40,height:40,borderRadius:11,background:"rgba(59,158,255,.1)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Bebas Neue'",fontSize:13,color:"var(--blue)",flexShrink:0}}>JR</div>
             <div>
               <div style={{fontWeight:800,fontSize:13,color:"var(--text)"}}>Juan Rodríguez <span className="badge bg" style={{fontSize:8}}>✅</span></div>
               <div style={{fontSize:10,color:"var(--muted)"}}>⭐ 4.8 · 342 entregas</div>
+              <div style={{fontSize:10,color:"var(--blue)",fontWeight:700,marginTop:2}}>📞 6333-4444</div>
             </div>
           </div>
-          <button style={{width:34,height:34,borderRadius:9,background:"rgba(0,214,143,.1)",border:"1px solid rgba(0,214,143,.22)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
-            <Ic n="phone" s={14} c="var(--green)"/>
-          </button>
         </div>
+        {/* Botones de comunicación */}
+        {order?.status==="EN_CAMINO"&&(
+          <div style={{display:"flex",gap:6,marginTop:6}}>
+            <a href="tel:+5076333-4444" style={{flex:1,padding:"9px",borderRadius:9,background:"rgba(0,214,143,.1)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:11,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+              📞 Llamar
+            </a>
+            <a href="https://wa.me/50763334444" target="_blank" rel="noopener" style={{flex:1,padding:"9px",borderRadius:9,background:"rgba(0,214,143,.1)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:11,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+              💬 WhatsApp
+            </a>
+            <a href="sms:+5076333-4444" style={{flex:1,padding:"9px",borderRadius:9,background:"rgba(59,158,255,.1)",border:"1px solid rgba(59,158,255,.3)",color:"var(--blue)",fontSize:11,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+              📩 SMS
+            </a>
+          </div>
+        )}
       </div>
       <div className="card">
         <div className="sec" style={{marginBottom:12}}>Estado del Pedido</div>
@@ -2271,7 +2283,7 @@ function HistorialScreen({ nav, orders=[], onClientApprove, onClientReject, onPr
     if(f==="entregados") return s==="ENTREGADO";
     if(f==="cancelados") return s==="CANCELADO";
     return true;
-  });
+  }).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)); // Más nuevo primero
   const totalAmt = o => {
     try{return '$'+(parseFloat(o.lotteryValue||0)+1+parseFloat(o.deliveryFee||0)).toFixed(2);}catch{return "$0.00";}
   };
@@ -4619,11 +4631,12 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
   const allItems = prodTab==="billetes"?billetes:chances;
   const isChance = prodTab==="chances";
 
-  // Pedidos reales del estado compartido
-  const pendingOrders     = orders.filter(o=>o.status==="PENDIENTE");
-  const replacementOrders = orders.filter(o=>o.status==="REEMPLAZO");
-  const approvedOrders    = orders.filter(o=>o.status==="APROBADO");
-  const allVOrders        = orders.filter(o=>["PENDIENTE","REEMPLAZO","MODIFICADO","APROBADO","EN_CAMINO","ENTREGADO","CANCELADO"].includes(o.status));
+  // Pedidos reales del estado compartido (ordenados del más nuevo al más antiguo)
+  const sortNew = (a,b)=>(b.createdAt||0)-(a.createdAt||0);
+  const pendingOrders     = orders.filter(o=>o.status==="PENDIENTE").sort(sortNew);
+  const replacementOrders = orders.filter(o=>o.status==="REEMPLAZO").sort(sortNew);
+  const approvedOrders    = orders.filter(o=>o.status==="APROBADO").sort(sortNew);
+  const allVOrders        = orders.filter(o=>["PENDIENTE","REEMPLAZO","MODIFICADO","APROBADO","EN_CAMINO","ENTREGADO","CANCELADO"].includes(o.status)).sort(sortNew);
 
   // ── SORTEO ACTIVO DEL VENDEDOR ────────────────────────────────────────────
   const SORTEOS_VENDEDOR = SORTEOS_RECIENTES.filter(s=>["MIERCOLITO","DOMINICAL","GORDITO","EXTRAORDINARIA"].includes(s.tipo));
@@ -5728,11 +5741,12 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
   // CORRECCIÓN: useEffect para sincronizar tab con nav inferior
   useEffect(() => { setRTab(initTab); }, [initTab]);
 
-  const approvedOrders  = orders.filter(o=>o.status==="APROBADO");
-  const inTransitOrders = orders.filter(o=>o.status==="EN_CAMINO");
-  const deliveredOrders = orders.filter(o=>o.status==="ENTREGADO");
+  const sortNewR = (a,b)=>(b.createdAt||0)-(a.createdAt||0);
+  const approvedOrders  = orders.filter(o=>o.status==="APROBADO").sort(sortNewR);
+  const inTransitOrders = orders.filter(o=>o.status==="EN_CAMINO").sort(sortNewR);
+  const deliveredOrders = orders.filter(o=>o.status==="ENTREGADO").sort(sortNewR);
   // Pedidos PENDIENTES: el repartidor los ve para saber que están en cola, pero no puede iniciarlos
-  const pendingOrders   = orders.filter(o=>["PENDIENTE","MODIFICADO","REEMPLAZO"].includes(o.status));
+  const pendingOrders   = orders.filter(o=>["PENDIENTE","MODIFICADO","REEMPLAZO"].includes(o.status)).sort(sortNewR);
 
   // ─── TRACKING GPS EN VIVO ───
   // Se activa automáticamente cuando el repartidor tiene al menos 1 entrega EN_CAMINO
@@ -5959,7 +5973,31 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
                 ))}
               </div>
 
-              <div style={{fontSize:10,color:"var(--muted)",marginBottom:3}}>📍 {o.deliveryAddr||"Panamá"}</div>
+              <div style={{fontSize:10,color:"var(--muted)",marginBottom:3}}>📍 {o.deliveryAddress?.text||o.deliveryAddr||"Panamá"}</div>
+
+              {/* Card del cliente con botones de contacto */}
+              {(isInTransit || o.status==="APROBADO") && (
+                <div style={{background:"rgba(0,229,160,.06)",border:"1px solid rgba(0,229,160,.2)",borderRadius:9,padding:"8px 10px",marginBottom:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <div>
+                      <div style={{fontSize:8,color:"var(--muted)",fontWeight:700,textTransform:"uppercase",marginBottom:1}}>Cliente</div>
+                      <div style={{fontSize:11,fontWeight:800,color:"var(--text)"}}>{o.customerName||"Cliente"}</div>
+                      <div style={{fontSize:9,color:"var(--blue)",fontWeight:700,marginTop:1}}>📞 {o.customerPhone||"6555-1234"}</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:5}}>
+                    <a href={`tel:+507${(o.customerPhone||"6555-1234").replace(/-/g,"")}`} style={{flex:1,padding:"6px",borderRadius:7,background:"rgba(0,214,143,.12)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:9,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+                      📞 Llamar
+                    </a>
+                    <a href={`https://wa.me/507${(o.customerPhone||"6555-1234").replace(/-/g,"")}`} target="_blank" rel="noopener" style={{flex:1,padding:"6px",borderRadius:7,background:"rgba(0,214,143,.12)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:9,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+                      💬 WhatsApp
+                    </a>
+                    <a href={`sms:+507${(o.customerPhone||"6555-1234").replace(/-/g,"")}`} style={{flex:1,padding:"6px",borderRadius:7,background:"rgba(59,158,255,.12)",border:"1px solid rgba(59,158,255,.3)",color:"var(--blue)",fontSize:9,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+                      📩 SMS
+                    </a>
+                  </div>
+                </div>
+              )}
 
               {/* Desglose financiero */}
               <div style={{background:"var(--bg2)",borderRadius:9,padding:"8px 10px",marginBottom:8}}>
@@ -6708,6 +6746,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       },
       customerId: authUser?.id || "cliente_maria",
       customerName: authUser?.nombre || "Cliente",
+      customerPhone: authUser?.telefono || "6555-1234",
       status:"PENDIENTE", round:1,          // round: número de vuelta de negociación
       history:[{by:"cliente",action:"Pedido creado",at:ts()}],
       createdAt:ts(),
