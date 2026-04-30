@@ -5723,6 +5723,8 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
   const approvedOrders  = orders.filter(o=>o.status==="APROBADO");
   const inTransitOrders = orders.filter(o=>o.status==="EN_CAMINO");
   const deliveredOrders = orders.filter(o=>o.status==="ENTREGADO");
+  // Pedidos PENDIENTES: el repartidor los ve para saber que están en cola, pero no puede iniciarlos
+  const pendingOrders   = orders.filter(o=>["PENDIENTE","MODIFICADO","REEMPLAZO"].includes(o.status));
 
   // ─── TRACKING GPS EN VIVO ───
   // Se activa automáticamente cuando el repartidor tiene al menos 1 entrega EN_CAMINO
@@ -5911,13 +5913,13 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
           Entregas del Día
           {(approvedOrders.length+inTransitOrders.length)>0&&<span style={{marginLeft:8,fontFamily:"'DM Sans'",background:"var(--green)",color:"#08111F",borderRadius:8,padding:"1px 6px",fontSize:9,fontWeight:800}}>{approvedOrders.length+inTransitOrders.length} activas</span>}
         </div>
-        {approvedOrders.length===0&&inTransitOrders.length===0&&deliveredOrders.length===0?(
+        {approvedOrders.length===0&&inTransitOrders.length===0&&deliveredOrders.length===0&&pendingOrders.length===0?(
           <div style={{textAlign:"center",padding:"24px 0",opacity:.6}}>
             <div style={{fontSize:36,marginBottom:8}}>🛵</div>
             <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>Sin entregas activas</div>
             <div style={{fontSize:11,color:"var(--muted)"}}>Los pedidos aprobados por el vendedor aparecerán aquí</div>
           </div>
-        ):[...approvedOrders,...inTransitOrders,...deliveredOrders].map(o=>{
+        ):[...pendingOrders,...approvedOrders,...inTransitOrders,...deliveredOrders].map(o=>{
           const et=calcOrderTotals(o.lotteryValue||"1.00",o.deliveryFee||"2.50",o.tip||"0");
           const cf=o.paymentMethod==="CASH"?calcCashFlow(et):null;
           const isInTransit=o.status==="EN_CAMINO";
@@ -5930,7 +5932,7 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
                   <span style={{fontSize:10,color:"var(--muted)",fontWeight:700}}>{o.id}</span>
                   {itemList.length>1&&<span style={{marginLeft:7,fontSize:9,fontWeight:800,color:"var(--blue)",background:"rgba(59,158,255,.1)",borderRadius:7,padding:"2px 6px"}}>{itemList.length} items</span>}
                 </div>
-                <span className={`badge ${isDelivered?"bg":isInTransit?"bb":"by"}`}>{isDelivered?"📦 Entregado":isInTransit?"🛵 En Camino":"✅ Aprobado"}</span>
+                <span className={`badge ${isDelivered?"bg":isInTransit?"bb":o.status==="APROBADO"?"by":"br"}`}>{isDelivered?"📦 Entregado":isInTransit?"🛵 En Camino":o.status==="APROBADO"?"✅ Aprobado":"⏳ Pendiente vendedor"}</span>
               </div>
 
               {/* Todos los items del pedido consolidado */}
@@ -5962,13 +5964,20 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
               </div>
 
               <div className="row" style={{gap:7,justifyContent:"flex-end",flexWrap:"wrap"}}>
+                {/* Botón "Esperando vendedor" cuando el pedido aún no está aprobado */}
+                {!isDelivered && !isInTransit && o.status !== "APROBADO" && (
+                  <div style={{padding:"7px 13px",background:"rgba(244,196,48,.08)",border:"1px dashed rgba(244,196,48,.3)",borderRadius:9,color:"var(--gold)",fontSize:11,fontWeight:700,fontFamily:"'DM Sans'",display:"flex",alignItems:"center",gap:5}}>
+                    ⏳ Esperando aprobación del vendedor
+                  </div>
+                )}
                 {/* Botón Cómo llegar (Waze / Google Maps) - aparece si está EN_CAMINO o APROBADO */}
                 {(isInTransit || (!isDelivered && o.status === "APROBADO")) && (
                   <button onClick={()=>abrirNavegacion(o)} style={{padding:"7px 13px",background:"rgba(244,196,48,.12)",border:"1px solid rgba(244,196,48,.3)",borderRadius:9,color:"var(--gold)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'",display:"flex",alignItems:"center",gap:5}}>
                     🗺️ Cómo llegar
                   </button>
                 )}
-                {!isDelivered&&!isInTransit&&onAssign&&(
+                {/* Botón Iniciar entrega: SOLO si está APROBADO (vendedor ya aceptó) */}
+                {!isDelivered && !isInTransit && o.status === "APROBADO" && onAssign && (
                   <button onClick={async ()=>{
                     // Capturar ubicación inicial antes de iniciar entrega
                     try {
