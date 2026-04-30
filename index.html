@@ -15,24 +15,14 @@
     <title>CHANCE — El Billetero de Todos</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      html, body, #root {
-        height: 100%;
-        background: #08101E;
-        font-family: 'DM Sans', sans-serif;
-        -webkit-font-smoothing: antialiased;
-        overscroll-behavior: none;
-      }
-      #splash {
-        position: fixed; inset: 0;
-        background: #08101E;
+      html, body, #root { height: 100%; background: #08101E; font-family: 'DM Sans', sans-serif;
+        -webkit-font-smoothing: antialiased; overscroll-behavior: none; }
+      #splash { position: fixed; inset: 0; background: #08101E;
         display: flex; align-items: center; justify-content: center;
-        flex-direction: column; gap: 16px; z-index: 9999;
-        transition: opacity 0.5s;
-      }
+        flex-direction: column; gap: 16px; z-index: 9999; transition: opacity 0.5s; }
       #splash.hidden { opacity: 0; pointer-events: none; }
       #splash-logo { font-family: 'Bebas Neue', sans-serif; font-size: 52px;
-        color: #FFCC33; letter-spacing: 14px;
-        text-shadow: 0 0 40px rgba(255,204,51,.5); }
+        color: #FFCC33; letter-spacing: 14px; text-shadow: 0 0 40px rgba(255,204,51,.5); }
       #splash-sub { font-size: 11px; color: #93ADCC; letter-spacing: 4px; text-transform: uppercase; }
       @keyframes spin { to { transform: rotate(360deg); } }
       .splash-spinner { width: 36px; height: 36px; border: 3px solid rgba(255,204,51,.2);
@@ -41,6 +31,27 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+    <!-- Leaflet (mapas gratis con OpenStreetMap) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+    <style>
+      /* Customización del mapa Leaflet para tema oscuro */
+      .leaflet-container { background: #1A2C48; font-family: 'DM Sans', sans-serif; }
+      .leaflet-tile-pane { filter: brightness(0.85) contrast(1.1) hue-rotate(180deg) invert(0.9) saturate(0.7); }
+      .leaflet-marker-icon, .leaflet-marker-shadow { filter: none !important; }
+      .leaflet-popup-content-wrapper { background: #243A58; color: #E8F0FA; border-radius: 12px; }
+      .leaflet-popup-tip { background: #243A58; }
+      .leaflet-control-zoom a { background: #243A58; color: #FFCC33; border: 1px solid #2E4870; }
+      .leaflet-control-attribution { background: rgba(0,0,0,0.5) !important; color: #93ADCC !important; font-size: 9px; }
+      .leaflet-control-attribution a { color: #FFCC33 !important; }
+      /* Marker animado del repartidor */
+      @keyframes pulseMoto { 0%,100% { transform: scale(1); } 50% { transform: scale(1.15); } }
+      .moto-marker { animation: pulseMoto 1.5s ease-in-out infinite; }
+    </style>
   </head>
   <body>
     <div id="splash">
