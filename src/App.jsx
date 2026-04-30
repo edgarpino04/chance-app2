@@ -100,6 +100,67 @@ const calcularETA = (distKm, velocidadKmh = 25) => {
   return Math.max(1, Math.round((distKm / velocidadKmh) * 60));
 };
 
+// ─── Abrir Waze / Google Maps con la dirección del pedido ───
+// Detecta el dispositivo y ofrece opciones de navegación
+const abrirNavegacion = (order) => {
+  // Obtener coordenadas del pedido (con fallbacks)
+  const lat = order?.deliveryAddress?.lat || order?.coordinates?.lat || 8.9824;
+  const lng = order?.deliveryAddress?.lng || order?.coordinates?.lng || -79.5199;
+  const direccion = order?.deliveryAddress?.text || order?.deliveryAddress || "Cliente";
+
+  // Detectar plataforma
+  const ua = navigator.userAgent || '';
+  const esIOS = /iPhone|iPad|iPod/i.test(ua);
+  const esAndroid = /Android/i.test(ua);
+
+  // Mostrar selector de app de navegación
+  const opciones = [
+    { nombre: "🚗 Waze", url: `https://waze.com/ul?ll=${lat},${lng}&navigate=yes` },
+    { nombre: "🗺️ Google Maps", url: `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving` },
+  ];
+  if (esIOS) {
+    opciones.push({ nombre: "🍎 Apple Maps", url: `https://maps.apple.com/?daddr=${lat},${lng}&dirflg=d` });
+  }
+
+  // Crear modal de selección
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'background:#1A2C48;border-radius:16px;padding:20px;max-width:320px;width:100%;border:1px solid #2E4870;';
+
+  const titulo = document.createElement('div');
+  titulo.style.cssText = 'font-family:Bebas Neue,sans-serif;font-size:20px;color:#FFCC33;letter-spacing:2px;margin-bottom:6px;';
+  titulo.textContent = 'CÓMO LLEGAR';
+  modal.appendChild(titulo);
+
+  const subtitulo = document.createElement('div');
+  subtitulo.style.cssText = 'font-size:11px;color:#93ADCC;margin-bottom:14px;';
+  subtitulo.textContent = `📍 ${direccion}`;
+  modal.appendChild(subtitulo);
+
+  opciones.forEach(op => {
+    const btn = document.createElement('button');
+    btn.style.cssText = 'display:block;width:100%;padding:12px;margin-bottom:8px;background:#243A58;border:1px solid #2E4870;border-radius:10px;color:#E8F0FA;font-size:14px;font-weight:700;cursor:pointer;font-family:DM Sans,sans-serif;text-align:left;';
+    btn.textContent = op.nombre;
+    btn.onclick = () => {
+      window.open(op.url, '_blank');
+      document.body.removeChild(overlay);
+    };
+    modal.appendChild(btn);
+  });
+
+  const cancel = document.createElement('button');
+  cancel.style.cssText = 'display:block;width:100%;padding:10px;margin-top:6px;background:transparent;border:1px solid #2E4870;border-radius:10px;color:#93ADCC;font-size:12px;cursor:pointer;font-family:DM Sans,sans-serif;';
+  cancel.textContent = 'Cancelar';
+  cancel.onclick = () => document.body.removeChild(overlay);
+  modal.appendChild(cancel);
+
+  overlay.appendChild(modal);
+  overlay.onclick = (e) => { if (e.target === overlay) document.body.removeChild(overlay); };
+  document.body.appendChild(overlay);
+};
+
 // ═══════════════════════════════════════════════════════════════════════
 // COMPONENTE: MapaLeaflet — mapa interactivo en tiempo real
 // Props:
@@ -1673,6 +1734,32 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
   const [addr,setAddr]=useState(ADDRESSES[0]);
   const [pay,setPay]=useState("efectivo");
   const [step,setStep]=useState(1);
+  // ─── NUEVO: Ubicación GPS del comprador ───
+  const [usarGPS, setUsarGPS] = useState(false);
+  const [ubicGPS, setUbicGPS] = useState(null);  // {lat, lng, precision}
+  const [gpsLoading, setGpsLoading] = useState(false);
+  const [gpsError, setGpsError] = useState(null);
+  const [textoUbicacion, setTextoUbicacion] = useState(""); // referencia adicional (ej: "Apto 5B")
+
+  // Capturar GPS del comprador
+  const capturarGPS = async () => {
+    setGpsLoading(true);
+    setGpsError(null);
+    try {
+      const ubic = await obtenerUbicacion();
+      setUbicGPS(ubic);
+      setUsarGPS(true);
+      setGpsLoading(false);
+    } catch (err) {
+      setGpsLoading(false);
+      const errMsg = err.code === 1 ? "Permiso denegado. Activa la ubicación en el navegador" :
+                     err.code === 2 ? "GPS no disponible. Verifica que esté activado" :
+                     err.code === 3 ? "Tiempo agotado. Intenta de nuevo" :
+                     "Error al obtener ubicación";
+      setGpsError(errMsg);
+    }
+  };
+
   const subtotal=cart.reduce((a,i)=>a+i.price*i.qty,0);
   const serviceFee=1.00;
   const deliveryFee=2.50;
@@ -1683,8 +1770,24 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
     {id:"yappy",   icon:"📱",l:"Yappy · Banco General",sub:"Pago QR — sin comisión bancaria"},
   ];
   const place=()=>{
+    // Construir dirección final con coordenadas GPS si aplica
+    const direccionFinal = usarGPS && ubicGPS ? {
+      ...addr,
+      label: "📍 Mi ubicación actual",
+      addr: textoUbicacion || `Lat: ${ubicGPS.lat.toFixed(5)}, Lng: ${ubicGPS.lng.toFixed(5)}`,
+      lat: ubicGPS.lat,
+      lng: ubicGPS.lng,
+      text: textoUbicacion || "Mi ubicación GPS"
+    } : {
+      ...addr,
+      // Coordenadas default por dirección guardada (Bay View Tower)
+      lat: addr.lat || 8.9824,
+      lng: addr.lng || -79.5199,
+      text: addr.addr
+    };
+
     const orderId = onConfirm
-      ? onConfirm(cart, pay==="yappy"?"YAPPY":"CASH", addr)
+      ? onConfirm(cart, pay==="yappy"?"YAPPY":"CASH", direccionFinal)
       : `CH-${2408+Math.floor(Math.random()*99)}`;
     setCart([]);
     nav({screen:"confirmacion", orderId: orderId||`CH-${Math.floor(Math.random()*9000+1000)}`});
@@ -1708,20 +1811,135 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
       </div>
       {step===1&&<div className="fu">
         <div className="sec">Dirección de Entrega</div>
+
+        {/* OPCIÓN GPS: Usar ubicación actual */}
+        <div
+          className="card"
+          style={{
+            cursor:"pointer",
+            border: usarGPS ? "1.5px solid rgba(0,229,160,.5)" : "1px solid var(--border)",
+            background: usarGPS ? "rgba(0,229,160,.06)" : "var(--bg2)",
+            marginBottom:8,
+          }}
+          onClick={() => { if (!usarGPS && !gpsLoading) capturarGPS(); }}
+        >
+          <div className="row" style={{justifyContent:"space-between"}}>
+            <div className="row" style={{gap:9, flex:1}}>
+              <span style={{fontSize:22}}>📍</span>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:13,color:"var(--text)"}}>Mi ubicación actual</div>
+                {gpsLoading && (
+                  <div style={{fontSize:11,color:"var(--gold)"}}>🔄 Obteniendo GPS...</div>
+                )}
+                {gpsError && (
+                  <div style={{fontSize:11,color:"var(--red)",lineHeight:1.3}}>⚠️ {gpsError}</div>
+                )}
+                {ubicGPS && !gpsLoading && (
+                  <div style={{fontSize:10,color:"var(--green)",lineHeight:1.4}}>
+                    ✅ GPS activo · Precisión: {Math.round(ubicGPS.precision)}m
+                  </div>
+                )}
+                {!gpsLoading && !ubicGPS && !gpsError && (
+                  <div style={{fontSize:11,color:"var(--muted)",lineHeight:1.4}}>Toca para usar GPS · más preciso para el repartidor</div>
+                )}
+              </div>
+            </div>
+            <div style={{
+              width:18,height:18,borderRadius:"50%",
+              border:`2px solid ${usarGPS?"var(--green)":"var(--border)"}`,
+              display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0
+            }}>
+              {usarGPS && <div style={{width:9,height:9,borderRadius:"50%",background:"var(--green)"}}/>}
+            </div>
+          </div>
+
+          {/* Mapa preview cuando hay GPS */}
+          {usarGPS && ubicGPS && (
+            <div style={{marginTop:10}}>
+              <MapaLeaflet
+                center={[ubicGPS.lat, ubicGPS.lng]}
+                zoom={16}
+                markers={[{
+                  type: 'comprador',
+                  lat: ubicGPS.lat,
+                  lng: ubicGPS.lng,
+                  label: 'Tu ubicación',
+                  popup: '<b>📍 Aquí entregar</b>'
+                }]}
+                height={160}
+              />
+              <div style={{marginTop:10}}>
+                <div style={{fontSize:10,color:"var(--muted)",marginBottom:5,fontWeight:700}}>
+                  Referencia adicional (opcional)
+                </div>
+                <input
+                  type="text"
+                  value={textoUbicacion}
+                  onChange={e=>setTextoUbicacion(e.target.value)}
+                  placeholder="Ej: Apto 5B · Edificio azul · 2do piso"
+                  style={{
+                    width:"100%",
+                    padding:"9px 12px",
+                    background:"var(--bg3)",
+                    border:"1px solid var(--border)",
+                    borderRadius:9,
+                    color:"var(--text)",
+                    fontSize:12,
+                    fontFamily:"'DM Sans'",
+                    outline:"none"
+                  }}
+                  onClick={e=>e.stopPropagation()}
+                />
+              </div>
+              <button
+                onClick={(e)=>{e.stopPropagation(); capturarGPS();}}
+                style={{
+                  marginTop:8,
+                  padding:"6px 11px",
+                  background:"rgba(244,196,48,.1)",
+                  border:"1px solid rgba(244,196,48,.3)",
+                  borderRadius:8,
+                  color:"var(--gold)",
+                  fontSize:10,
+                  fontWeight:700,
+                  cursor:"pointer",
+                  fontFamily:"'DM Sans'"
+                }}
+              >
+                🔄 Actualizar ubicación
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Separador "O usar dirección guardada" */}
+        <div style={{display:"flex",alignItems:"center",gap:10,margin:"4px 0 8px"}}>
+          <div style={{flex:1,height:1,background:"var(--border)"}}/>
+          <div style={{fontSize:9,color:"var(--muted)",fontWeight:700,letterSpacing:1}}>O DIRECCIÓN GUARDADA</div>
+          <div style={{flex:1,height:1,background:"var(--border)"}}/>
+        </div>
+
         {ADDRESSES.map(a=>(
-          <div key={a.id} className="card" style={{cursor:"pointer",border:`1px solid ${addr.id===a.id?"rgba(244,196,48,.4)":"var(--border)"}`,background:addr.id===a.id?"rgba(244,196,48,.04)":"var(--bg2)",marginBottom:8}} onClick={()=>setAddr(a)}>
+          <div key={a.id} className="card" style={{cursor:"pointer",border:`1px solid ${!usarGPS && addr.id===a.id?"rgba(244,196,48,.4)":"var(--border)"}`,background:!usarGPS && addr.id===a.id?"rgba(244,196,48,.04)":"var(--bg2)",marginBottom:8,opacity: usarGPS ? 0.55 : 1}} onClick={()=>{ setAddr(a); setUsarGPS(false); }}>
             <div className="row" style={{justifyContent:"space-between"}}>
               <div className="row" style={{gap:9}}>
                 <span style={{fontSize:22}}>{a.icon}</span>
                 <div><div style={{fontWeight:700,fontSize:13,color:"var(--text)"}}>{a.label}</div><div style={{fontSize:11,color:"var(--muted)",lineHeight:1.4}}>{a.addr}</div></div>
               </div>
-              <div style={{width:18,height:18,borderRadius:"50%",border:`2px solid ${addr.id===a.id?"var(--gold)":"var(--border)"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                {addr.id===a.id&&<div style={{width:9,height:9,borderRadius:"50%",background:"var(--gold)"}}/>}
+              <div style={{width:18,height:18,borderRadius:"50%",border:`2px solid ${!usarGPS && addr.id===a.id?"var(--gold)":"var(--border)"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                {!usarGPS && addr.id===a.id&&<div style={{width:9,height:9,borderRadius:"50%",background:"var(--gold)"}}/>}
               </div>
             </div>
           </div>
         ))}
-        <button className="btn" style={{marginTop:6}} onClick={()=>setStep(2)}>Continuar →</button>
+        <button
+          className="btn"
+          style={{marginTop:6, opacity: (usarGPS && !ubicGPS) ? 0.5 : 1}}
+          disabled={usarGPS && !ubicGPS}
+          onClick={()=>setStep(2)}
+        >
+          {usarGPS && !ubicGPS ? "Esperando GPS..." : "Continuar →"}
+        </button>
       </div>}
       {step===2&&<div className="fu">
         <div className="sec">Método de Pago (Contra Entrega)</div>
@@ -5690,9 +5908,15 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
                 </div>
               </div>
 
-              <div className="row" style={{gap:7,justifyContent:"flex-end"}}>
+              <div className="row" style={{gap:7,justifyContent:"flex-end",flexWrap:"wrap"}}>
+                {/* Botón Cómo llegar (Waze / Google Maps) - aparece si está EN_CAMINO o APROBADO */}
+                {(isInTransit || (!isDelivered && o.status === "APROBADO")) && (
+                  <button onClick={()=>abrirNavegacion(o)} style={{padding:"7px 13px",background:"rgba(244,196,48,.12)",border:"1px solid rgba(244,196,48,.3)",borderRadius:9,color:"var(--gold)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'",display:"flex",alignItems:"center",gap:5}}>
+                    🗺️ Cómo llegar
+                  </button>
+                )}
                 {!isDelivered&&!isInTransit&&onAssign&&(
-                  <button onClick={()=>onAssign(o.id)} style={{padding:"7px 13px",background:"rgba(59,158,255,.12)",border:"1px solid rgba(59,158,255,.3)",borderRadius:9,color:"var(--blue)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>🛵 Iniciar entrega</button>
+                  <button onClick={()=>{ onAssign(o.id); abrirNavegacion(o); }} style={{padding:"7px 13px",background:"rgba(59,158,255,.12)",border:"1px solid rgba(59,158,255,.3)",borderRadius:9,color:"var(--blue)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>🛵 Iniciar entrega</button>
                 )}
                 {isInTransit&&onDeliver&&(
                   <button onClick={()=>handleDeliver(o.id)} style={{padding:"7px 13px",background:"rgba(0,214,143,.12)",border:"1px solid rgba(0,214,143,.3)",borderRadius:9,color:"var(--green)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>✓ Marcar Entregado</button>
@@ -6363,6 +6587,13 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       vendorId:items[0].vendorId||"V001", lotteryValue:lotteryTotal.toFixed(2),
       deliveryFee:"2.50", tip:"0", paymentMethod:method,
       deliveryAddr:addr?.label||"Casa",
+      // ─── NUEVO: Dirección completa con coordenadas para GPS/navegación ───
+      deliveryAddress: {
+        label: addr?.label || "Casa",
+        text: addr?.text || addr?.addr || "",
+        lat: addr?.lat || 8.9824,
+        lng: addr?.lng || -79.5199,
+      },
       customerId: authUser?.id || "cliente_maria",
       customerName: authUser?.nombre || "Cliente",
       status:"PENDIENTE", round:1,          // round: número de vuelta de negociación
@@ -6490,7 +6721,15 @@ function App({ forceRole=null, authUser=null, onLogout=null,
     notifySound("approve");
     setSharedOrders(p=>p.map(o=>o.id!==id?o:{...o,status:"APROBADO",approvedAt:ts(),history:[...(o.history||[]),{by:"vendedor",action:"Aprobó pedido",at:ts()}]}));
   };
-  const assignOrder  = id => setSharedOrders(p=>p.map(o=>o.id!==id?o:{...o,status:"EN_CAMINO",assignedAt:ts()}));
+  const assignOrder  = id => setSharedOrders(p=>p.map(o=>{
+    if (o.id !== id) return o;
+    // VALIDACIÓN: solo permitir pasar a EN_CAMINO si el vendedor ya APROBÓ
+    if (o.status !== "APROBADO") {
+      console.warn(`No se puede iniciar entrega de ${id}: el vendedor no ha aprobado (estado actual: ${o.status})`);
+      return o; // No cambia el estado
+    }
+    return {...o, status:"EN_CAMINO", assignedAt:ts()};
+  }));
   const deliverOrder = id => setSharedOrders(p=>p.map(o=>o.id!==id?o:{...o,status:"ENTREGADO",deliveredAt:ts()}));
 
   /** Vendedor cancela el pedido y notifica al comprador */
