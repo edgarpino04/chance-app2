@@ -8439,49 +8439,114 @@ export default function ChanceRoot() {
   const [sharedChances,  setSharedChances]  = useState(VENDORS[0].chances);
   const [sharedOrders,   setSharedOrders]   = useState([]);
   const [stateLoaded,    setStateLoaded]    = useState(false);
+  // Refs para evitar bucles infinitos al sincronizar con Firebase
+  const ordersHashRef    = useRef("");
+  const billetesHashRef  = useRef("");
+  const chancesHashRef   = useRef("");
+  const skipNextSyncRef  = useRef({ orders: false, billetes: false, chances: false });
 
-  // Cargar estado persistido al iniciar
+  // ════════════════════════════════════════════════════════════════════
+  // SINCRONIZACIÓN CON FIREBASE (en lugar de window.storage local)
+  // Todos los celulares reciben los cambios en tiempo real (polling 3s)
+  // ════════════════════════════════════════════════════════════════════
   useEffect(() => {
-    (async () => {
-      // Intentar actualizar sorteos desde el Worker (no bloquea si falla)
-      cargarSorteosAutomaticos();
+    // Cargar sorteos automáticos al iniciar
+    cargarSorteosAutomaticos();
 
+    // 1. Cargar datos iniciales desde Firebase
+    (async () => {
       try {
-        const [ordersR, billetesR, chancesR] = await Promise.all([
-          window.storage.get("shared_orders_db"),
-          window.storage.get("shared_billetes_db"),
-          window.storage.get("shared_chances_db"),
+        const [pedidos, billetes, chances] = await Promise.all([
+          fbRead("pedidos"),
+          fbRead("billetes"),
+          fbRead("chances"),
         ]);
-        if (ordersR?.value)   setSharedOrders(JSON.parse(ordersR.value));
-        if (billetesR?.value) setSharedBilletes(JSON.parse(billetesR.value));
-        if (chancesR?.value)  setSharedChances(JSON.parse(chancesR.value));
-      } catch(e) {}
+        if (Array.isArray(pedidos)) {
+          setSharedOrders(pedidos);
+          ordersHashRef.current = JSON.stringify(pedidos);
+        }
+        if (Array.isArray(billetes)) {
+          setSharedBilletes(billetes);
+          billetesHashRef.current = JSON.stringify(billetes);
+        }
+        if (Array.isArray(chances)) {
+          setSharedChances(chances);
+          chancesHashRef.current = JSON.stringify(chances);
+        }
+      } catch(e) { console.warn("Error cargando datos:", e.message); }
       setStateLoaded(true);
     })();
+
+    // 2. Listener en tiempo real para PEDIDOS (poll cada 3s)
+    const stopPedidos = fbListen("pedidos", (data) => {
+      const newHash = JSON.stringify(data || []);
+      if (newHash !== ordersHashRef.current) {
+        ordersHashRef.current = newHash;
+        skipNextSyncRef.current.orders = true; // evita loop al recibir
+        setSharedOrders(Array.isArray(data) ? data : []);
+      }
+    }, 3000);
+
+    // 3. Listener para BILLETES (inventario)
+    const stopBilletes = fbListen("billetes", (data) => {
+      const newHash = JSON.stringify(data || []);
+      if (newHash !== billetesHashRef.current) {
+        billetesHashRef.current = newHash;
+        skipNextSyncRef.current.billetes = true;
+        if (Array.isArray(data)) setSharedBilletes(data);
+      }
+    }, 3000);
+
+    // 4. Listener para CHANCES (inventario)
+    const stopChances = fbListen("chances", (data) => {
+      const newHash = JSON.stringify(data || []);
+      if (newHash !== chancesHashRef.current) {
+        chancesHashRef.current = newHash;
+        skipNextSyncRef.current.chances = true;
+        if (Array.isArray(data)) setSharedChances(data);
+      }
+    }, 3000);
+
+    return () => { stopPedidos(); stopBilletes(); stopChances(); };
   }, []);
 
-  // Guardar pedidos cada vez que cambien
+  // Subir pedidos a Firebase cada vez que cambien (excepto cuando vinieron de Firebase)
   useEffect(() => {
     if (!stateLoaded) return;
-    (async () => {
-      try { await window.storage.set("shared_orders_db", JSON.stringify(sharedOrders)); } catch(e) {}
-    })();
+    if (skipNextSyncRef.current.orders) {
+      skipNextSyncRef.current.orders = false;
+      return;
+    }
+    const newHash = JSON.stringify(sharedOrders);
+    if (newHash === ordersHashRef.current) return;
+    ordersHashRef.current = newHash;
+    fbWrite("pedidos", sharedOrders);
   }, [sharedOrders, stateLoaded]);
 
-  // Guardar billetes cada vez que cambien
+  // Subir billetes a Firebase
   useEffect(() => {
     if (!stateLoaded) return;
-    (async () => {
-      try { await window.storage.set("shared_billetes_db", JSON.stringify(sharedBilletes)); } catch(e) {}
-    })();
+    if (skipNextSyncRef.current.billetes) {
+      skipNextSyncRef.current.billetes = false;
+      return;
+    }
+    const newHash = JSON.stringify(sharedBilletes);
+    if (newHash === billetesHashRef.current) return;
+    billetesHashRef.current = newHash;
+    fbWrite("billetes", sharedBilletes);
   }, [sharedBilletes, stateLoaded]);
 
-  // Guardar chances cada vez que cambien
+  // Subir chances a Firebase
   useEffect(() => {
     if (!stateLoaded) return;
-    (async () => {
-      try { await window.storage.set("shared_chances_db", JSON.stringify(sharedChances)); } catch(e) {}
-    })();
+    if (skipNextSyncRef.current.chances) {
+      skipNextSyncRef.current.chances = false;
+      return;
+    }
+    const newHash = JSON.stringify(sharedChances);
+    if (newHash === chancesHashRef.current) return;
+    chancesHashRef.current = newHash;
+    fbWrite("chances", sharedChances);
   }, [sharedChances, stateLoaded]);
 
   // Seed demo users and restore session on mount
