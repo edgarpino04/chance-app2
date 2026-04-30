@@ -170,7 +170,7 @@ const abrirNavegacion = (order) => {
 //   route: array de [lat, lng] para dibujar ruta
 //   height: altura del mapa (default 250)
 // ═══════════════════════════════════════════════════════════════════════
-function MapaLeaflet({ center = [8.9824, -79.5199], zoom = 14, markers = [], route = null, height = 250 }) {
+function MapaLeaflet({ center = [8.9824, -79.5199], zoom = 14, markers = [], route = null, height = 250, draggablePinIndex = null, onPinMove = null }) {
   const mapRef = useRef(null);
   const containerRef = useRef(null);
   const markersRef = useRef([]);
@@ -223,20 +223,43 @@ function MapaLeaflet({ center = [8.9824, -79.5199], zoom = 14, markers = [], rou
     markersRef.current.forEach(m => mapRef.current.removeLayer(m));
     markersRef.current = [];
     // Agregar nuevos
-    markers.forEach(m => {
-      const marker = window.L.marker([m.lat, m.lng], { icon: getIcon(m.type) }).addTo(mapRef.current);
+    markers.forEach((m, idx) => {
+      const isDraggable = draggablePinIndex === idx;
+      const marker = window.L.marker([m.lat, m.lng], {
+        icon: getIcon(m.type),
+        draggable: isDraggable,
+        autoPan: true
+      }).addTo(mapRef.current);
       if (m.popup) marker.bindPopup(m.popup);
       if (m.label) marker.bindTooltip(m.label, { permanent: false, direction: 'top' });
+      // Listener para cuando el usuario suelta el pin
+      if (isDraggable && onPinMove) {
+        marker.on('dragend', (e) => {
+          const pos = e.target.getLatLng();
+          onPinMove({ lat: pos.lat, lng: pos.lng });
+        });
+        // También permitir click en el mapa para mover el pin
+        mapRef.current.on('click', (e) => {
+          marker.setLatLng(e.latlng);
+          onPinMove({ lat: e.latlng.lat, lng: e.latlng.lng });
+        });
+      }
       markersRef.current.push(marker);
     });
-    // Auto-ajustar vista si hay múltiples markers
-    if (markers.length > 1) {
-      const bounds = window.L.latLngBounds(markers.map(m => [m.lat, m.lng]));
-      mapRef.current.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
-    } else if (markers.length === 1) {
-      mapRef.current.setView([markers[0].lat, markers[0].lng], zoom);
+    // Auto-ajustar vista solo si no hay pin draggable (no recentrar mientras arrastra)
+    if (draggablePinIndex === null) {
+      if (markers.length > 1) {
+        const bounds = window.L.latLngBounds(markers.map(m => [m.lat, m.lng]));
+        mapRef.current.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+      } else if (markers.length === 1) {
+        mapRef.current.setView([markers[0].lat, markers[0].lng], zoom);
+      }
     }
-  }, [markers]);
+    return () => {
+      // Limpiar listener click cuando cambian markers
+      if (mapRef.current) mapRef.current.off('click');
+    };
+  }, [JSON.stringify(markers.map(m => [m.lat, m.lng, m.type])), draggablePinIndex]);
 
   // Dibujar ruta
   useEffect(() => {
@@ -1855,10 +1878,13 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
 
           {/* Mapa preview cuando hay GPS */}
           {usarGPS && ubicGPS && (
-            <div style={{marginTop:10}}>
+            <div style={{marginTop:10}} onClick={(e)=>e.stopPropagation()}>
+              <div style={{fontSize:10,color:"var(--gold)",marginBottom:6,fontWeight:700,textAlign:"center"}}>
+                ✋ Arrastra el pin o toca el mapa para ajustar tu ubicación exacta
+              </div>
               <MapaLeaflet
                 center={[ubicGPS.lat, ubicGPS.lng]}
-                zoom={16}
+                zoom={17}
                 markers={[{
                   type: 'comprador',
                   lat: ubicGPS.lat,
@@ -1866,7 +1892,15 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
                   label: 'Tu ubicación',
                   popup: '<b>📍 Aquí entregar</b>'
                 }]}
-                height={160}
+                draggablePinIndex={0}
+                onPinMove={(nuevaPos) => {
+                  setUbicGPS(prev => ({
+                    ...prev,
+                    lat: nuevaPos.lat,
+                    lng: nuevaPos.lng,
+                  }));
+                }}
+                height={200}
               />
               <div style={{marginTop:10}}>
                 <div style={{fontSize:10,color:"var(--muted)",marginBottom:5,fontWeight:700}}>
@@ -1906,7 +1940,7 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
                   fontFamily:"'DM Sans'"
                 }}
               >
-                🔄 Actualizar ubicación
+                🔄 Volver a usar mi ubicación GPS
               </button>
             </div>
           )}
@@ -2018,7 +2052,21 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
             </div>
           ))}
         </div>
-        <div className="card" style={{marginBottom:7}}><div style={{fontSize:9,color:"var(--muted)",fontWeight:700,textTransform:"uppercase",marginBottom:3}}>Entrega en</div><div style={{fontSize:12,fontWeight:600,color:"var(--text)"}}>{addr.icon} {addr.label} — {addr.addr}</div></div>
+        <div className="card" style={{marginBottom:7}}>
+          <div style={{fontSize:9,color:"var(--muted)",fontWeight:700,textTransform:"uppercase",marginBottom:3}}>Entrega en</div>
+          {usarGPS && ubicGPS ? (
+            <>
+              <div style={{fontSize:12,fontWeight:600,color:"var(--text)"}}>
+                📍 {textoUbicacion || "Mi ubicación actual"}
+              </div>
+              <div style={{fontSize:10,color:"var(--green)",marginTop:3}}>
+                ✅ GPS · {ubicGPS.lat.toFixed(5)}, {ubicGPS.lng.toFixed(5)}
+              </div>
+            </>
+          ) : (
+            <div style={{fontSize:12,fontWeight:600,color:"var(--text)"}}>{addr.icon} {addr.label} — {addr.addr}</div>
+          )}
+        </div>
         <div className="card" style={{marginBottom:12}}>
           <div style={{fontSize:9,color:"var(--muted)",fontWeight:700,textTransform:"uppercase",marginBottom:3}}>Pago al recibir</div>
           <div style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{METHODS.find(m=>m.id===pay)?.icon} {METHODS.find(m=>m.id===pay)?.l}</div>
@@ -2077,23 +2125,26 @@ function TrackingScreen({ order }) {
     type: 'vendedor', lat: ubicVendedor.lat, lng: ubicVendedor.lng,
     label: 'Vendedor', popup: '<b>🏪 Carlos Medina</b><br/>Calle 50 / San Francisco'
   });
-  // Marker del repartidor solo si está activo y en camino
-  if (ubicRepartidor && ubicRepartidor.activo && order?.status === "EN_CAMINO") {
+  // Marker del repartidor: aparece desde EN_CAMINO si tenemos cualquier ubicación
+  // (incluso si "activo" es false, mostramos la última ubicación conocida)
+  if (ubicRepartidor && ubicRepartidor.lat && ubicRepartidor.lng && order?.status === "EN_CAMINO") {
+    const tiempoUlt = ubicRepartidor.timestamp ? Math.round((Date.now() - ubicRepartidor.timestamp) / 60000) : null;
     markers.push({
       type: 'repartidor', lat: ubicRepartidor.lat, lng: ubicRepartidor.lng,
-      label: 'Repartidor en vivo', popup: `<b>🛵 Juan Rodríguez</b><br/>Velocidad: ${ubicRepartidor.velocidad || 0} km/h`
+      label: ubicRepartidor.activo ? 'Repartidor en vivo' : 'Última ubicación',
+      popup: `<b>🛵 Juan Rodríguez</b><br/>${ubicRepartidor.activo ? `Velocidad: ${ubicRepartidor.velocidad || 0} km/h` : `Hace ${tiempoUlt || 0} min`}`
     });
   }
 
   // Calcular ETA si tenemos ubicación del repartidor
   let etaMin = null;
-  if (ubicRepartidor && ubicRepartidor.activo && order?.status === "EN_CAMINO") {
+  if (ubicRepartidor && ubicRepartidor.lat && order?.status === "EN_CAMINO") {
     const distKm = calcularDistancia(ubicRepartidor.lat, ubicRepartidor.lng, ubicComprador.lat, ubicComprador.lng);
     etaMin = calcularETA(distKm, ubicRepartidor.velocidad > 5 ? ubicRepartidor.velocidad : 25);
   }
 
   // Ruta del repartidor al comprador (línea recta como referencia)
-  const route = (ubicRepartidor && ubicRepartidor.activo && order?.status === "EN_CAMINO")
+  const route = (ubicRepartidor && ubicRepartidor.lat && order?.status === "EN_CAMINO")
     ? [[ubicRepartidor.lat, ubicRepartidor.lng], [ubicComprador.lat, ubicComprador.lng]]
     : null;
 
@@ -2131,13 +2182,15 @@ function TrackingScreen({ order }) {
           <div style={{fontSize:10,color:order?.status==="ENTREGADO"?"var(--green)":"var(--gold)",fontWeight:800}}>
             {order?.status==="ENTREGADO"?"✅ ENTREGADO":
              order?.status==="EN_CAMINO"&&etaMin!==null?`🛵 EN CAMINO · ${etaMin} min`:
-             order?.status==="EN_CAMINO"?"🛵 EN CAMINO · esperando GPS...":
+             order?.status==="EN_CAMINO"?"🛵 EN CAMINO · activando GPS...":
              "⏳ PREPARANDO"}
           </div>
         </div>
-        {ubicRepartidor && ubicRepartidor.activo && order?.status === "EN_CAMINO" && (
-          <div style={{position:"absolute",bottom:10,right:10,background:"rgba(8,17,31,.92)",borderRadius:9,padding:"5px 9px",border:"1px solid rgba(0,229,160,.3)",zIndex:500,pointerEvents:'none'}}>
-            <div style={{fontSize:9,color:"var(--green)",fontWeight:700}}>● EN VIVO</div>
+        {ubicRepartidor && ubicRepartidor.lat && order?.status === "EN_CAMINO" && (
+          <div style={{position:"absolute",bottom:10,right:10,background:"rgba(8,17,31,.92)",borderRadius:9,padding:"5px 9px",border:`1px solid ${ubicRepartidor.activo ? "rgba(0,229,160,.3)" : "rgba(255,204,51,.3)"}`,zIndex:500,pointerEvents:'none'}}>
+            <div style={{fontSize:9,color: ubicRepartidor.activo ? "var(--green)" : "var(--gold)",fontWeight:700}}>
+              {ubicRepartidor.activo ? "● EN VIVO" : "⏸ PAUSADO"}
+            </div>
           </div>
         )}
       </div>
@@ -5916,7 +5969,27 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
                   </button>
                 )}
                 {!isDelivered&&!isInTransit&&onAssign&&(
-                  <button onClick={()=>{ onAssign(o.id); abrirNavegacion(o); }} style={{padding:"7px 13px",background:"rgba(59,158,255,.12)",border:"1px solid rgba(59,158,255,.3)",borderRadius:9,color:"var(--blue)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>🛵 Iniciar entrega</button>
+                  <button onClick={async ()=>{
+                    // Capturar ubicación inicial antes de iniciar entrega
+                    try {
+                      const pos = await new Promise((resolve, reject) => {
+                        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 8000 });
+                      });
+                      // Enviar ubicación inicial a Firebase inmediatamente
+                      await fbWrite(`ubicaciones/juan`, {
+                        lat: pos.coords.latitude,
+                        lng: pos.coords.longitude,
+                        timestamp: Date.now(),
+                        precision: pos.coords.accuracy,
+                        velocidad: 0,
+                        activo: true
+                      });
+                    } catch(e) {
+                      console.warn("No se pudo obtener GPS inicial:", e.message);
+                    }
+                    onAssign(o.id);
+                    abrirNavegacion(o);
+                  }} style={{padding:"7px 13px",background:"rgba(59,158,255,.12)",border:"1px solid rgba(59,158,255,.3)",borderRadius:9,color:"var(--blue)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>🛵 Iniciar entrega</button>
                 )}
                 {isInTransit&&onDeliver&&(
                   <button onClick={()=>handleDeliver(o.id)} style={{padding:"7px 13px",background:"rgba(0,214,143,.12)",border:"1px solid rgba(0,214,143,.3)",borderRadius:9,color:"var(--green)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>✓ Marcar Entregado</button>
