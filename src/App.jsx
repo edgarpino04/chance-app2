@@ -291,12 +291,14 @@ function MapaLeaflet({ center = [8.9824, -79.5199], zoom = 14, markers = [], rou
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// HOOK: useTrackingRepartidor — envía ubicación del repartidor cada 5s
-// Solo activar cuando el repartidor tiene un pedido EN_CAMINO
+// HOOK: useTrackingUbicacion — envía ubicación del usuario cada vez que cambia
+// Funciona para cualquier rol: vendedor, repartidor o comprador
+// userId: identificador único del usuario (ej: "vendedor_carlos", "repartidor_juan")
+// activo: si true, captura GPS y envía a Firebase
 // ═══════════════════════════════════════════════════════════════════════
-function useTrackingRepartidor(repartidorId, activo) {
+function useTrackingUbicacion(userId, activo) {
   useEffect(() => {
-    if (!activo || !repartidorId) return;
+    if (!activo || !userId) return;
     if (!navigator.geolocation) {
       console.warn("Geolocalización no soportada");
       return;
@@ -309,10 +311,10 @@ function useTrackingRepartidor(repartidorId, activo) {
         lng: pos.coords.longitude,
         timestamp: Date.now(),
         precision: pos.coords.accuracy,
-        velocidad: pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0, // m/s a km/h
+        velocidad: pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0,
         activo: true
       };
-      fbWrite(`ubicaciones/${repartidorId}`, data);
+      fbWrite(`ubicaciones/${userId}`, data);
     };
 
     // Primera ubicación inmediata
@@ -328,28 +330,34 @@ function useTrackingRepartidor(repartidorId, activo) {
     // Marcar inactivo al desmontar
     return () => {
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-      fbUpdate(`ubicaciones/${repartidorId}`, { activo: false });
+      fbUpdate(`ubicaciones/${userId}`, { activo: false });
     };
-  }, [repartidorId, activo]);
+  }, [userId, activo]);
 }
 
+// Alias por compatibilidad
+const useTrackingRepartidor = useTrackingUbicacion;
+
 // ═══════════════════════════════════════════════════════════════════════
-// HOOK: useUbicacionRepartidor — escucha la ubicación del repartidor
-// Para uso del comprador y vendedor
+// HOOK: useUbicacionUsuario — escucha la ubicación de cualquier usuario
+// Para uso del comprador, vendedor o repartidor
 // ═══════════════════════════════════════════════════════════════════════
-function useUbicacionRepartidor(repartidorId) {
+function useUbicacionUsuario(userId) {
   const [ubicacion, setUbicacion] = useState(null);
   useEffect(() => {
-    if (!repartidorId) return;
-    const stop = fbListen(`ubicaciones/${repartidorId}`, (data) => {
+    if (!userId) return;
+    const stop = fbListen(`ubicaciones/${userId}`, (data) => {
       if (data && data.lat && data.lng) {
         setUbicacion(data);
       }
     }, 3000); // poll cada 3s
     return stop;
-  }, [repartidorId]);
+  }, [userId]);
   return ubicacion;
 }
+
+// Alias por compatibilidad
+const useUbicacionRepartidor = useUbicacionUsuario;
 
 // ═══════════════════════════════════════════════════════════════════════
 // COMPONENTE: RepartidorMapa — mapa para el repartidor con sus entregas
@@ -357,7 +365,7 @@ function useUbicacionRepartidor(repartidorId) {
 //  - Su ubicación actual (GPS en vivo)
 //  - Pins de cada cliente a entregar
 // ═══════════════════════════════════════════════════════════════════════
-function RepartidorMapa({ orders = [], repartidorId = "juan" }) {
+function RepartidorMapa({ orders = [], repartidorId = "repartidor_juan" }) {
   const ubicMia = useUbicacionRepartidor(repartidorId);
   // Por defecto centrado en Panamá ciudad
   const center = ubicMia ? [ubicMia.lat, ubicMia.lng] : [8.9824, -79.5199];
@@ -2107,26 +2115,21 @@ function ConfirmacionScreen({ orderId, nav }) {
 
 function TrackingScreen({ order }) {
   // Tracking en tiempo real del repartidor desde Firebase
-  const ubicRepartidor = useUbicacionRepartidor(order?.repartidorId || "juan");
+  const ubicRepartidor = useUbicacionUsuario(order?.repartidorId || "repartidor_juan");
 
-  // Coordenadas estáticas (en producción vendrían del pedido)
-  const ubicVendedor  = { lat: 8.9690, lng: -79.5350 }; // Carlos Medina (San Francisco)
+  // Coordenadas del comprador (ubicación de entrega que eligió en el pedido)
   const ubicComprador = order?.deliveryAddress?.lat
     ? { lat: order.deliveryAddress.lat, lng: order.deliveryAddress.lng }
-    : { lat: 8.9824, lng: -79.5199 }; // Default: Bay View Tower
+    : { lat: 8.9824, lng: -79.5199 };
 
   // Construir markers según el estado del pedido
+  // NOTA: NO mostramos al vendedor por privacidad (estándar Uber Eats / DiDi Food)
   const markers = [];
   markers.push({
     type: 'comprador', lat: ubicComprador.lat, lng: ubicComprador.lng,
     label: 'Tu ubicación', popup: `<b>📍 Entregar aquí</b><br/>${order?.deliveryAddress?.text || 'Bay View Tower'}`
   });
-  markers.push({
-    type: 'vendedor', lat: ubicVendedor.lat, lng: ubicVendedor.lng,
-    label: 'Vendedor', popup: '<b>🏪 Carlos Medina</b><br/>Calle 50 / San Francisco'
-  });
   // Marker del repartidor: aparece desde EN_CAMINO si tenemos cualquier ubicación
-  // (incluso si "activo" es false, mostramos la última ubicación conocida)
   if (ubicRepartidor && ubicRepartidor.lat && ubicRepartidor.lng && order?.status === "EN_CAMINO") {
     const tiempoUlt = ubicRepartidor.timestamp ? Math.round((Date.now() - ubicRepartidor.timestamp) / 60000) : null;
     markers.push({
@@ -4593,6 +4596,11 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
   const [editingOrder, setEditingOrder] = useState(null);  // orderId siendo editado
   const [editedItems,  setEditedItems]  = useState([]);    // items editados
 
+  // ─── TRACKING GPS DEL VENDEDOR ───
+  // El vendedor envía su ubicación a Firebase mientras está activo
+  // Se usa para que el repartidor sepa dónde recoger los billetes
+  useTrackingUbicacion("vendedor_carlos", true);
+
   // CORRECCIÓN: useEffect (no useState) para sincronizar tab con nav inferior
   useEffect(() => { setMainTab(initTab); }, [initTab]);
 
@@ -5730,7 +5738,7 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
   // Se activa automáticamente cuando el repartidor tiene al menos 1 entrega EN_CAMINO
   // Envía la ubicación a Firebase cada vez que cambia (watchPosition)
   const tieneEntregaActiva = inTransitOrders.length > 0;
-  useTrackingRepartidor("juan", tieneEntregaActiva);
+  useTrackingUbicacion("repartidor_juan", tieneEntregaActiva);
 
   // Estado del GPS (para mostrar al repartidor)
   const [gpsStatus, setGpsStatus] = useState(null);
@@ -5896,7 +5904,7 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
         </div>
         {/* Mapa real con Leaflet del repartidor */}
         {(approvedOrders.length>0 || inTransitOrders.length>0) ? (
-          <RepartidorMapa orders={[...approvedOrders, ...inTransitOrders]} repartidorId="juan" />
+          <RepartidorMapa orders={[...approvedOrders, ...inTransitOrders]} repartidorId="repartidor_juan" />
         ) : (
           <div style={{
             height:160, borderRadius:14, background:"var(--bg2)",
@@ -5985,7 +5993,7 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
                         navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 8000 });
                       });
                       // Enviar ubicación inicial a Firebase inmediatamente
-                      await fbWrite(`ubicaciones/juan`, {
+                      await fbWrite(`ubicaciones/repartidor_juan`, {
                         lat: pos.coords.latitude,
                         lng: pos.coords.longitude,
                         timestamp: Date.now(),
@@ -6567,6 +6575,28 @@ function PerfilScreen({ authUser=null, onLogout=null, currentRole=null, onSwitch
           </div>
         </div>
       ))}
+
+      {/* ── ZONA DEMO/PRUEBAS: Limpiar todos los datos ── */}
+      <button
+        onClick={async () => {
+          if (!confirm("⚠️ Esto borrará TODOS los pedidos, billetes y chances de Firebase para empezar pruebas limpias.\n\n¿Continuar?")) return;
+          try {
+            // Limpiar todo en Firebase
+            await Promise.all([
+              fbWrite("pedidos", []),
+              fbWrite("billetes", []),
+              fbWrite("chances", []),
+              fetch(`${FB_DB_URL}/ubicaciones.json`, { method: "DELETE" }),
+            ]);
+            alert("✅ Datos limpiados. La app se recargará.");
+            window.location.reload();
+          } catch(e) {
+            alert("Error: " + e.message);
+          }
+        }}
+        style={{width:"100%",padding:"11px",borderRadius:14,background:"rgba(244,196,48,.07)",border:"1px dashed rgba(244,196,48,.3)",color:"var(--gold)",fontFamily:"'DM Sans'",fontWeight:700,fontSize:12,cursor:"pointer",marginBottom:10}}>
+        🧹 Limpiar datos demo (Firebase)
+      </button>
 
       {/* ── CERRAR SESIÓN ── */}
       <button
@@ -8462,8 +8492,29 @@ export default function ChanceRoot() {
           fbRead("chances"),
         ]);
         if (Array.isArray(pedidos)) {
-          setSharedOrders(pedidos);
-          ordersHashRef.current = JSON.stringify(pedidos);
+          // ─── AUTO-CORRECCIÓN: pedidos con estado inconsistente ───
+          // Si un pedido está EN_CAMINO/ENTREGADO pero NO tiene approvedAt,
+          // significa que pasó por aprobación antes de las validaciones nuevas.
+          // Lo regresamos a PENDIENTE para forzar el flujo correcto.
+          const pedidosCorregidos = pedidos.map(p => {
+            if ((p.status === "EN_CAMINO" || p.status === "ENTREGADO") && !p.approvedAt && !p.vendorApprovedAt) {
+              return {
+                ...p,
+                status: "PENDIENTE",
+                assignedAt: undefined,
+                deliveredAt: undefined,
+                history: [...(p.history||[]), { by: "sistema", action: "Auto-corregido: estado inválido sin aprobación", at: ts() }]
+              };
+            }
+            return p;
+          });
+          setSharedOrders(pedidosCorregidos);
+          ordersHashRef.current = JSON.stringify(pedidosCorregidos);
+          // Si hubo correcciones, subir cambios a Firebase
+          if (JSON.stringify(pedidosCorregidos) !== JSON.stringify(pedidos)) {
+            console.log("⚠️ Pedidos auto-corregidos por estados inválidos");
+            fbWrite("pedidos", pedidosCorregidos);
+          }
         }
         if (Array.isArray(billetes)) {
           setSharedBilletes(billetes);
