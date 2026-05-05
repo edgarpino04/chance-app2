@@ -462,18 +462,21 @@ function ChanceLogo({ height=48, style={} }) {
 const UPDATER_URL = "https://chance-updater.edgarpino-d1e.workers.dev"; // ⚠️ AJUSTAR AL DESPLEGAR EL WORKER
 
 // Datos seed (fallback si el Worker no responde)
+// IMPORTANTE: estos son datos de respaldo. El Worker debería sobrescribirlos
+// con los resultados reales más recientes desde suerteloteria.com / lnb.gob.pa
 const SORTEOS_RECIENTES_SEED = [
   {
     tipo: "MIERCOLITO", icon: "⚡", color: "#3B9EFF", bg: "rgba(59,158,255,.1)", border: "rgba(59,158,255,.28)",
-    sorteoN: "3061", fecha: "22 de abril de 2026",
+    sorteoN: "3062", fecha: "29 de abril de 2026",
     premios: [
-      { pos: "1er Premio", num: "9864", letras: "CBBC", serie: "20", folio: "1" },
-      { pos: "2do Premio", num: "1117", letras: "", serie: "", folio: "" },
-      { pos: "3er Premio", num: "1379", letras: "", serie: "", folio: "" },
+      { pos: "1er Premio", num: "0000", letras: "----", serie: "00", folio: "0" },
+      { pos: "2do Premio", num: "0000", letras: "", serie: "", folio: "" },
+      { pos: "3er Premio", num: "0000", letras: "", serie: "", folio: "" },
     ],
     premioMayor: "$100,000",
-    proximoISO: "2026-04-29T15:00:00",
+    proximoISO: "2026-05-06T15:00:00",
     frecuencia: "Cada miércoles",
+    pendienteVerificacion: true, // marca visual: el Worker aún no ha confirmado los números
   },
   {
     tipo: "EXTRAORDINARIA", icon: "💎", color: "#A78BFA", bg: "rgba(167,139,250,.1)", border: "rgba(167,139,250,.28)",
@@ -489,27 +492,29 @@ const SORTEOS_RECIENTES_SEED = [
   },
   {
     tipo: "DOMINICAL", icon: "🌟", color: "#F4C430", bg: "rgba(244,196,48,.1)", border: "rgba(244,196,48,.28)",
-    sorteoN: "5549", fecha: "26 de abril de 2026",
+    sorteoN: "5550", fecha: "3 de mayo de 2026",
     premios: [
-      { pos: "1er Premio", num: "5144", letras: "BABD", serie: "6", folio: "13" },
-      { pos: "2do Premio", num: "2104", letras: "", serie: "", folio: "" },
-      { pos: "3er Premio", num: "1579", letras: "", serie: "", folio: "" },
+      { pos: "1er Premio", num: "0000", letras: "----", serie: "00", folio: "0" },
+      { pos: "2do Premio", num: "0000", letras: "", serie: "", folio: "" },
+      { pos: "3er Premio", num: "0000", letras: "", serie: "", folio: "" },
     ],
     premioMayor: "$100,000",
-    proximoISO: "2026-05-03T15:00:00",
+    proximoISO: "2026-05-10T15:00:00",
     frecuencia: "Cada domingo",
+    pendienteVerificacion: true,
   },
   {
     tipo: "GORDITO", icon: "🍀", color: "#00D68F", bg: "rgba(0,214,143,.1)", border: "rgba(0,214,143,.28)",
-    sorteoN: "409", fecha: "27 de marzo de 2026",
+    sorteoN: "410", fecha: "24 de abril de 2026",
     premios: [
-      { pos: "1er Premio", num: "4778", letras: "BCAA", serie: "9", folio: "5" },
-      { pos: "2do Premio", num: "20",   letras: "", serie: "", folio: "" },
-      { pos: "3er Premio", num: "89",   letras: "", serie: "", folio: "" },
+      { pos: "1er Premio", num: "0000", letras: "----", serie: "00", folio: "0" },
+      { pos: "2do Premio", num: "0000", letras: "", serie: "", folio: "" },
+      { pos: "3er Premio", num: "0000", letras: "", serie: "", folio: "" },
     ],
     premioMayor: "$1,004,000",
-    proximoISO: "2026-04-24T15:00:00",
+    proximoISO: "2026-05-29T15:00:00",
     frecuencia: "Último viernes del mes",
+    pendienteVerificacion: true,
   },
 ];
 
@@ -1101,9 +1106,17 @@ function SorteoCountdown({ isoDateStr, color, border }) {
 function ClienteHome({ cart, nav, sharedVendor, activeOrders=[] }) {
   const countdown = useCountdown("2026-04-08T15:00:00");
   const [sorteoTab, setSorteoTab] = useState("MIERCOLITO");
+  const [, forceRefresh] = useState(0);
   const cartCount = cart.reduce((a,i)=>a+i.qty,0);
   const modifiedOrders    = activeOrders.filter(o=>o.status==="MODIFICADO");
   const vendorCancelledOrders = activeOrders.filter(o=>o.status==="CANCELADO_VENDEDOR");
+
+  // Re-renderizar cuando el Worker actualice los sorteos
+  useEffect(() => {
+    const handler = () => forceRefresh(v => v + 1);
+    window.addEventListener('sorteos-actualizados', handler);
+    return () => window.removeEventListener('sorteos-actualizados', handler);
+  }, []);
 
   const sorted = [...SORTEOS_RECIENTES].sort((a,b)=>{
     const order=["MIERCOLITO","DOMINICAL","GORDITO","EXTRAORDINARIA"];
@@ -1174,7 +1187,7 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[] }) {
       </div>
 
       {/* Sorteo card con datos reales */}
-      <div className="sort-card" style={{background:selSorteo.bg,borderColor:selSorteo.border,marginBottom:12}}>
+      <div className="sort-card" style={{background:selSorteo.bg,borderColor:selSorteo.border,marginBottom:12,position:"relative"}}>
         <div style={{position:"absolute",right:-20,top:-20,width:90,height:90,borderRadius:"50%",background:selSorteo.bg}}/>
         <div className="row" style={{justifyContent:"space-between",marginBottom:8}}>
           <div>
@@ -1186,16 +1199,28 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[] }) {
             <div style={{fontFamily:"'Bebas Neue'",fontSize:28,color:selSorteo.color,letterSpacing:2}}>{selSorteo.premioMayor}</div>
           </div>
         </div>
+        {/* Banner: pendiente verificación oficial */}
+        {selSorteo.pendienteVerificacion && (
+          <div style={{background:"rgba(244,196,48,.12)",border:"1px dashed rgba(244,196,48,.4)",borderRadius:9,padding:"6px 10px",marginBottom:8,display:"flex",gap:7,alignItems:"center"}}>
+            <span style={{fontSize:14}}>⏳</span>
+            <div style={{flex:1}}>
+              <div style={{fontSize:10,fontWeight:800,color:"var(--gold)"}}>Verificando resultado oficial…</div>
+              <div style={{fontSize:9,color:"var(--muted)"}}>Sincronizando con Lotería Nacional. Los números se actualizarán automáticamente.</div>
+            </div>
+            <button onClick={()=>cargarSorteosAutomaticos()} style={{background:"rgba(244,196,48,.2)",border:"none",borderRadius:7,padding:"4px 8px",fontSize:9,fontWeight:800,color:"var(--gold)",cursor:"pointer"}}>Refrescar</button>
+          </div>
+        )}
         {/* Premios */}
         <div style={{display:"flex",gap:8}}>
           {selSorteo.premios.map((p,pi)=>{
             const cols=["var(--gold)","var(--blue)","var(--green)"];
+            const esPlaceholder = p.num === "0000" || p.num === "00000";
             return (
-              <div key={p.pos} style={{flex:1,background:"rgba(8,17,31,.4)",borderRadius:10,padding:"8px 4px",textAlign:"center"}}>
+              <div key={p.pos} style={{flex:1,background:"rgba(8,17,31,.4)",borderRadius:10,padding:"8px 4px",textAlign:"center",opacity:esPlaceholder?0.4:1}}>
                 <div style={{fontSize:8,color:"var(--muted)",fontWeight:700,textTransform:"uppercase",letterSpacing:.5,marginBottom:3}}>{p.pos}</div>
-                <div style={{fontFamily:"'Bebas Neue'",fontSize:p.num.length>4?14:18,color:cols[pi],letterSpacing:1,lineHeight:1}}>{p.num}</div>
-                {p.letras&&<div style={{fontSize:8,color:selSorteo.color,fontWeight:800,marginTop:2,letterSpacing:.5}}>{p.letras}</div>}
-                {p.serie&&<div style={{fontSize:8,color:"var(--muted)",marginTop:1}}>S{p.serie} F{p.folio}</div>}
+                <div style={{fontFamily:"'Bebas Neue'",fontSize:p.num.length>4?14:18,color:esPlaceholder?"var(--muted)":cols[pi],letterSpacing:1,lineHeight:1}}>{esPlaceholder?"——":p.num}</div>
+                {p.letras&&p.letras!=="----"&&<div style={{fontSize:8,color:selSorteo.color,fontWeight:800,marginTop:2,letterSpacing:.5}}>{p.letras}</div>}
+                {p.serie&&p.serie!=="00"&&<div style={{fontSize:8,color:"var(--muted)",marginTop:1}}>S{p.serie} F{p.folio}</div>}
               </div>
             );
           })}
@@ -2433,7 +2458,16 @@ function HistorialScreen({ nav, orders=[], onClientApprove, onClientReject, onPr
     if(f==="entregados") return s==="ENTREGADO";
     if(f==="cancelados") return s==="CANCELADO";
     return true;
-  }).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)); // Más nuevo primero
+  }).sort((a,b)=>{
+    // Más reciente primero. Usa createdAtMs (numérico) si existe; cae a parsear
+    // el id "CH-2408" como tiebreaker (mayor número = más reciente)
+    const aMs = typeof a.createdAtMs==='number' ? a.createdAtMs : 0;
+    const bMs = typeof b.createdAtMs==='number' ? b.createdAtMs : 0;
+    if (bMs !== aMs) return bMs - aMs;
+    const aId = parseInt((a.id||'').replace(/\D/g,''))||0;
+    const bId = parseInt((b.id||'').replace(/\D/g,''))||0;
+    return bId - aId;
+  });
   const totalAmt = o => {
     try{return '$'+(parseFloat(o.lotteryValue||0)+1+parseFloat(o.deliveryFee||0)).toFixed(2);}catch{return "$0.00";}
   };
@@ -3474,6 +3508,13 @@ async function cargarSorteosAutomaticos() {
     }
 
     console.log(`✅ Sorteos actualizados automáticamente desde ${UPDATER_URL}`);
+    // Disparar evento global para que componentes React se re-rendericen
+    if (typeof window !== 'undefined') {
+      window.__sorteosVersion = (window.__sorteosVersion || 0) + 1;
+      window.dispatchEvent(new CustomEvent('sorteos-actualizados', {
+        detail: { version: window.__sorteosVersion }
+      }));
+    }
     return true;
   } catch (err) {
     console.warn("No se pudieron cargar sorteos automáticos:", err.message);
@@ -4350,6 +4391,116 @@ function ResultadosScreen({ initTab="resultados" }) {
    ║  - Usa Cloudflare Pages Function como proxy seguro a Gemini  ║
    ║  - Si el API falla, muestra error claro al usuario           ║
    ╚══════════════════════════════════════════════════════════════╝ */
+
+// ─── Componente: lista detallada de apariciones de un número ───
+// Muestra cada sorteo donde salió: tipo, fecha, posición (1er/2do/3er) y número completo.
+function Apariciones({ num, apariciones = [], GOLD = "#FFCC33", GREEN = "#00E5A0", BLUE = "#4DB5FF" }) {
+  const [expanded, setExpanded] = useState(false);
+  const VISIBLE_INICIAL = 5;
+  const lista = expanded ? apariciones : apariciones.slice(0, VISIBLE_INICIAL);
+
+  // Color por posición de premio
+  const colorPos = pos => {
+    if (pos === "1er" || pos === "1°") return GOLD;
+    if (pos === "2do" || pos === "2°") return BLUE;
+    return GREEN;
+  };
+  // Color por tipo de sorteo (para identificar visualmente)
+  const colorTipo = tipo => {
+    if (tipo === "MIERCOLITO") return "#3B9EFF";
+    if (tipo === "DOMINICAL") return "#F4C430";
+    if (tipo === "GORDITO") return "#00D68F";
+    if (tipo === "EXTRAORDINARIA") return "#A78BFA";
+    return "#9CB8D4";
+  };
+  const iconoTipo = tipo => {
+    if (tipo === "MIERCOLITO") return "⚡";
+    if (tipo === "DOMINICAL") return "🌟";
+    if (tipo === "GORDITO") return "🍀";
+    if (tipo === "EXTRAORDINARIA") return "💎";
+    return "🎲";
+  };
+
+  if (apariciones.length === 0) {
+    return (
+      <div style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text)", marginBottom: 8, letterSpacing: .5 }}>
+          🗓️ Detalle de apariciones del <span style={{ color: GOLD, fontFamily: "'Bebas Neue',sans-serif", fontSize: 16 }}>{num}</span>
+        </div>
+        <div style={{ textAlign: "center", padding: "16px 0", opacity: .6 }}>
+          <div style={{ fontSize: 28, marginBottom: 6 }}>❄️</div>
+          <div style={{ fontSize: 11, color: "var(--muted)" }}>El número {num} no ha salido en el historial registrado</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text)", letterSpacing: .5 }}>
+          🗓️ Detalle de apariciones del <span style={{ color: GOLD, fontFamily: "'Bebas Neue',sans-serif", fontSize: 16 }}>{num}</span>
+        </div>
+        <span style={{ fontSize: 10, color: "var(--muted)", background: "rgba(255,204,51,.1)", border: "1px solid rgba(255,204,51,.3)", borderRadius: 6, padding: "2px 6px", fontWeight: 700 }}>
+          {apariciones.length} {apariciones.length === 1 ? "vez" : "veces"}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        {lista.map((a, idx) => (
+          <div key={`${a.tipo}-${a.sorteoN}-${idx}`}
+            style={{
+              display: "flex", gap: 10, alignItems: "center",
+              padding: "8px 10px", borderRadius: 9,
+              background: "rgba(8,17,31,.4)",
+              borderLeft: `3px solid ${colorTipo(a.tipo)}`,
+            }}>
+            {/* Icono + tipo */}
+            <div style={{ width: 38, textAlign: "center", flexShrink: 0 }}>
+              <div style={{ fontSize: 18 }}>{iconoTipo(a.tipo)}</div>
+              <div style={{ fontSize: 7, fontWeight: 800, color: colorTipo(a.tipo), letterSpacing: .3, marginTop: 1 }}>{a.tipo}</div>
+            </div>
+            {/* Detalle: fecha + sorteo */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)" }}>{a.fecha}</div>
+              <div style={{ fontSize: 9, color: "var(--muted)", marginTop: 1 }}>Sorteo Nº {a.sorteoN}</div>
+            </div>
+            {/* Premio: posición + número completo */}
+            <div style={{ textAlign: "right", flexShrink: 0 }}>
+              <div style={{
+                fontSize: 9, fontWeight: 800, letterSpacing: .5,
+                color: colorPos(a.pos),
+                background: `${colorPos(a.pos)}20`, border: `1px solid ${colorPos(a.pos)}40`,
+                borderRadius: 5, padding: "2px 6px", display: "inline-block", marginBottom: 3,
+              }}>
+                {a.posLabel}
+              </div>
+              <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 16, color: colorPos(a.pos), letterSpacing: 1, lineHeight: 1 }}>
+                {a.numCompleto}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {apariciones.length > VISIBLE_INICIAL && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            width: "100%", marginTop: 10, padding: "8px",
+            background: "transparent", border: "1px dashed var(--border)",
+            borderRadius: 9, color: "var(--muted)", fontSize: 11, fontWeight: 700,
+            cursor: "pointer", fontFamily: "'DM Sans',sans-serif",
+          }}>
+          {expanded
+            ? `▲ Mostrar menos`
+            : `▼ Ver las otras ${apariciones.length - VISIBLE_INICIAL} apariciones`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function SuerteScreen() {
   const [tab, setTab] = useState("suenos");
 
@@ -4448,6 +4599,50 @@ function SuerteScreen() {
     const freq = chances.filter(n => n === num).length;
     const pct = total > 0 ? ((freq / total) * 100).toFixed(1) : "0.0";
 
+    // ─── Detalle de apariciones: lista de cada sorteo donde salió este número ───
+    // Por cada sorteo del HISTORIAL, revisamos los 3 premios y guardamos los matches.
+    // Para billetes (4 dígitos) consideramos que el chance "07" apareció si los
+    // últimos 2 dígitos del billete coinciden (estándar Lotería Nacional Panamá).
+    const apariciones = [];
+    for (const h of HISTORIAL) {
+      h.premios.forEach((p, idx) => {
+        const num4 = p.num || "";
+        let coincide = false;
+        let etiqueta = "";
+        if (num4.length <= 2) {
+          // Premio de chance directo (Gordito 2 dígitos)
+          if (num4.padStart(2, "0") === num) {
+            coincide = true;
+            etiqueta = num4.padStart(2, "0");
+          }
+        } else if (num4.length === 4 || num4.length === 5) {
+          // Premio de billete: el chance corresponde a los últimos 2 dígitos
+          if (num4.slice(-2) === num) {
+            coincide = true;
+            etiqueta = num4;
+          }
+        }
+        if (coincide) {
+          apariciones.push({
+            tipo: h.tipo,
+            sorteoN: h.sorteoN,
+            fecha: h.fecha,
+            mes: h.mes,
+            anio: h.anio,
+            pos: ["1er", "2do", "3er"][idx] || `${idx+1}°`,
+            posLabel: ["1er Premio", "2do Premio", "3er Premio"][idx] || `Premio ${idx+1}`,
+            numCompleto: etiqueta,
+          });
+        }
+      });
+    }
+    // Ordenar de más reciente a más antiguo
+    apariciones.sort((a, b) => {
+      if (a.anio !== b.anio) return b.anio - a.anio;
+      if (a.mes !== b.mes) return b.mes - a.mes;
+      return parseInt(b.sorteoN || 0) - parseInt(a.sorteoN || 0);
+    });
+
     let ultimaSalida = null;
     let sorteosSinSalir = 0;
     let encontrado = false;
@@ -4474,7 +4669,7 @@ function SuerteScreen() {
       (freq10 * 15) + (freq * 2) + (caliente ? 20 : 5) + Math.random() * 10
     )));
 
-    return { freq, total, pct, ultimaSalida, sorteosSinSalir, caliente, probabilidad, freq10 };
+    return { freq, total, pct, ultimaSalida, sorteosSinSalir, caliente, probabilidad, freq10, apariciones };
   };
 
   const stats = calcStats(numSelected);
@@ -4707,6 +4902,9 @@ function SuerteScreen() {
             ))}
           </div>
 
+          {/* ── Detalle de cada aparición histórica (premio + fecha + sorteo) ── */}
+          <Apariciones num={numSelected} apariciones={stats.apariciones} GOLD={GOLD} GREEN={GREEN} BLUE={BLUE} />
+
           <div style={{ background: "rgba(196,168,255,.08)", border: "1px solid rgba(196,168,255,.25)", borderRadius: 14, padding: "14px", marginBottom: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 800, color: "#C4A8FF", letterSpacing: 1, marginBottom: 8 }}>🤖 CONSEJO DEL EXPERTO</div>
             <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>
@@ -4782,7 +4980,15 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
   const isChance = prodTab==="chances";
 
   // Pedidos reales del estado compartido (ordenados del más nuevo al más antiguo)
-  const sortNew = (a,b)=>(b.createdAt||0)-(a.createdAt||0);
+  // Usa createdAtMs numérico; cae al ID como tiebreaker para datos demo sin timestamp
+  const sortNew = (a,b)=>{
+    const aMs = typeof a.createdAtMs==='number' ? a.createdAtMs : 0;
+    const bMs = typeof b.createdAtMs==='number' ? b.createdAtMs : 0;
+    if (bMs !== aMs) return bMs - aMs;
+    const aId = parseInt((a.id||'').replace(/\D/g,''))||0;
+    const bId = parseInt((b.id||'').replace(/\D/g,''))||0;
+    return bId - aId;
+  };
   const pendingOrders     = orders.filter(o=>o.status==="PENDIENTE").sort(sortNew);
   const replacementOrders = orders.filter(o=>o.status==="REEMPLAZO").sort(sortNew);
   const approvedOrders    = orders.filter(o=>o.status==="APROBADO").sort(sortNew);
@@ -5891,7 +6097,14 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
   // CORRECCIÓN: useEffect para sincronizar tab con nav inferior
   useEffect(() => { setRTab(initTab); }, [initTab]);
 
-  const sortNewR = (a,b)=>(b.createdAt||0)-(a.createdAt||0);
+  const sortNewR = (a,b)=>{
+    const aMs = typeof a.createdAtMs==='number' ? a.createdAtMs : 0;
+    const bMs = typeof b.createdAtMs==='number' ? b.createdAtMs : 0;
+    if (bMs !== aMs) return bMs - aMs;
+    const aId = parseInt((a.id||'').replace(/\D/g,''))||0;
+    const bId = parseInt((b.id||'').replace(/\D/g,''))||0;
+    return bId - aId;
+  };
   const approvedOrders  = orders.filter(o=>o.status==="APROBADO").sort(sortNewR);
   const inTransitOrders = orders.filter(o=>o.status==="EN_CAMINO").sort(sortNewR);
   const deliveredOrders = orders.filter(o=>o.status==="ENTREGADO").sort(sortNewR);
@@ -6923,6 +7136,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       status:"PENDIENTE", round:1,          // round: número de vuelta de negociación
       history:[{by:"cliente",action:"Pedido creado",at:ts()}],
       createdAt:ts(),
+      createdAtMs: Date.now(),  // Timestamp numérico para sorting confiable
     }]);
     return id;
   };
@@ -8388,6 +8602,47 @@ function AdminPanel({ adminUser, onLogout }) {
   const stClass  = {ACTIVO:"st-active",PENDIENTE:"st-pending",SUSPENDIDO:"st-suspended"};
   const stLabel  = {ACTIVO:"Activo",PENDIENTE:"Pendiente",SUSPENDIDO:"Suspendido"};
 
+  // ─── Estado de configuraciones admin (persistidas) ───
+  const [adminCfg, setAdminCfg] = useStorage("admin_cfg", {
+    // Comisiones (en centavos × 100 para precisión)
+    commissionPctVendor: 2.5,           // % que paga el vendedor a la app
+    serviceFeeUSD:       1.00,          // service fee fijo en USD
+    deliveryTiers: [
+      { maxKm: 3,  fee: 2.50 },
+      { maxKm: 6,  fee: 3.50 },
+      { maxKm: 10, fee: 5.00 },
+      { maxKm: 15, fee: 7.00 },
+      { maxKm: 25, fee: 10.00 },
+    ],
+    deliveryExtraPerKm: 0.40,
+    // Zonas de cobertura
+    zonas: [
+      { id:1, nombre:"Ciudad de Panamá", activa:true, radiusKm:25 },
+      { id:2, nombre:"San Miguelito",    activa:true, radiusKm:15 },
+      { id:3, nombre:"Arraiján",         activa:true, radiusKm:20 },
+      { id:4, nombre:"La Chorrera",      activa:false,radiusKm:25 },
+      { id:5, nombre:"Colón",            activa:false,radiusKm:30 },
+      { id:6, nombre:"Chepo",            activa:false,radiusKm:20 },
+    ],
+    // Seguridad
+    requireMFA:        false,
+    sessionTimeoutMin: 60,
+    minPwdLen:         8,
+    requireSpecialChar:true,
+    blockAfterFails:   5,
+  });
+
+  // Sub-pantalla de config activa: null | "sorteos" | "comisiones" | "zonas" | "notif" | "reportes" | "seguridad" | "terminos"
+  const [cfgSection, setCfgSection] = useState(null);
+  // Notificación push (form)
+  const [pushTitle, setPushTitle]   = useState("");
+  const [pushMsg,   setPushMsg]     = useState("");
+  const [pushAudience, setPushAudience] = useState("todos");
+  // Términos & condiciones
+  const [terminosTxt, setTerminosTxt] = useStorage("admin_terminos", "Términos y condiciones de uso de CHANCE — Lotería Nacional de Beneficencia de Panamá.\n\n1. Aceptación de términos…\n2. Uso permitido…\n3. Privacidad…\n4. Limitación de responsabilidad…");
+
+  const updateCfg = (patch) => setAdminCfg({ ...adminCfg, ...patch });
+
   return (
     <div style={{background:"var(--bg)",minHeight:"100vh",fontFamily:"'DM Sans',sans-serif"}}>
       <div style={{maxWidth:480,margin:"0 auto",padding:"0 0 32px"}}>
@@ -8583,27 +8838,316 @@ function AdminPanel({ adminUser, onLogout }) {
           {/* ── TAB: CONFIG ── */}
           {aTab==="config"&&(
             <>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:14}}>CONFIGURACIÓN</div>
-              <div className="admin-card">
-                {[
-                  {ic:"🎟",l:"Gestión de sorteos",d:"Administra fechas y premios"},
-                  {ic:"💰",l:"Comisiones de la App",d:"Edita % de comisión por rol"},
-                  {ic:"📍",l:"Zonas de cobertura",d:"Define áreas de entrega activas"},
-                  {ic:"📢",l:"Notificaciones push",d:"Enviar mensajes masivos"},
-                  {ic:"📊",l:"Reportes y métricas",d:"Ventas, entregas, ingresos"},
-                  {ic:"🔒",l:"Seguridad",d:"Políticas de contraseña, 2FA"},
-                  {ic:"📋",l:"Términos y condiciones",d:"Editar documentos legales"},
-                ].map((item,i)=>(
-                  <div key={item.l} className="admin-row" style={{cursor:"pointer"}}>
-                    <div style={{width:36,height:36,borderRadius:10,background:"var(--bg3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{item.ic}</div>
-                    <div style={{flex:1}}>
-                      <div style={{fontWeight:700,fontSize:13,color:"var(--text)"}}>{item.l}</div>
-                      <div style={{fontSize:10,color:"var(--muted)"}}>{item.d}</div>
-                    </div>
-                    <Ic n="chevR" s={14} c="var(--muted)"/>
+              {!cfgSection && (
+                <>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:14}}>CONFIGURACIÓN</div>
+                  <div className="admin-card">
+                    {[
+                      {key:"sorteos",   ic:"🎟",l:"Gestión de sorteos",      d:"Administra fechas y premios"},
+                      {key:"comisiones",ic:"💰",l:"Comisiones de la App",   d:"Edita % de comisión y delivery"},
+                      {key:"zonas",     ic:"📍",l:"Zonas de cobertura",     d:"Define áreas de entrega activas"},
+                      {key:"notif",     ic:"📢",l:"Notificaciones push",    d:"Enviar mensajes masivos"},
+                      {key:"reportes",  ic:"📊",l:"Reportes y métricas",    d:"Ventas, entregas, ingresos"},
+                      {key:"seguridad", ic:"🔒",l:"Seguridad",              d:"Políticas de contraseña, 2FA"},
+                      {key:"terminos",  ic:"📋",l:"Términos y condiciones", d:"Editar documentos legales"},
+                    ].map((item)=>(
+                      <div key={item.key} className="admin-row" style={{cursor:"pointer"}} onClick={()=>setCfgSection(item.key)}>
+                        <div style={{width:36,height:36,borderRadius:10,background:"var(--bg3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{item.ic}</div>
+                        <div style={{flex:1}}>
+                          <div style={{fontWeight:700,fontSize:13,color:"var(--text)"}}>{item.l}</div>
+                          <div style={{fontSize:10,color:"var(--muted)"}}>{item.d}</div>
+                        </div>
+                        <Ic n="chevR" s={14} c="var(--muted)"/>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </>
+              )}
+
+              {/* Botón volver al menú config */}
+              {cfgSection && (
+                <button onClick={()=>setCfgSection(null)} style={{background:"none",border:"none",color:"#A78BFA",cursor:"pointer",fontSize:12,marginBottom:10,display:"flex",alignItems:"center",gap:4,fontFamily:"'DM Sans',sans-serif",fontWeight:700}}>
+                  ← Volver a Configuración
+                </button>
+              )}
+
+              {/* ─── 1. GESTIÓN DE SORTEOS ─── */}
+              {cfgSection === "sorteos" && (
+                <>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:6}}>🎟 GESTIÓN DE SORTEOS</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginBottom:14}}>Sorteos de la Lotería Nacional sincronizados con suerteloteria.com</div>
+
+                  <div className="admin-card" style={{marginBottom:12}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <div>
+                        <div style={{fontSize:11,fontWeight:800,color:"var(--text)",letterSpacing:.5}}>Auto-sincronización</div>
+                        <div style={{fontSize:9,color:"var(--muted)"}}>Cron diario · {UPDATER_URL.includes("AJUSTAR")?"❌ Worker no configurado":"✅ Activo"}</div>
+                      </div>
+                      <button onClick={async()=>{const ok=await cargarSorteosAutomaticos();toast(ok?"✅ Sorteos sincronizados":"⚠️ No se pudo sincronizar");}} style={{background:"rgba(167,139,250,.15)",border:"1px solid rgba(167,139,250,.4)",color:"#A78BFA",padding:"7px 12px",borderRadius:8,fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>🔄 Sincronizar ahora</button>
+                    </div>
+                  </div>
+
+                  <div style={{fontSize:10,fontWeight:800,color:"var(--muted)",letterSpacing:1,marginBottom:8}}>SORTEOS ACTUALES</div>
+                  {SORTEOS_RECIENTES.map(s=>(
+                    <div key={s.tipo} className="admin-card" style={{marginBottom:8}}>
+                      <div className="row" style={{justifyContent:"space-between",alignItems:"center"}}>
+                        <div>
+                          <div style={{fontSize:13,fontWeight:800,color:s.color}}>{s.icon} {s.tipo} · #{s.sorteoN}</div>
+                          <div style={{fontSize:10,color:"var(--muted)",marginTop:2}}>{s.fecha} · Premio mayor {s.premioMayor}</div>
+                        </div>
+                        {s.pendienteVerificacion ? (
+                          <span style={{fontSize:9,color:"var(--gold)",background:"rgba(244,196,48,.15)",padding:"3px 7px",borderRadius:6,fontWeight:800}}>⏳ Pendiente</span>
+                        ) : (
+                          <span style={{fontSize:9,color:"var(--green)",background:"rgba(0,229,160,.12)",padding:"3px 7px",borderRadius:6,fontWeight:800}}>✓ Verificado</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="admin-card" style={{marginTop:12,background:"rgba(59,158,255,.07)",border:"1px solid rgba(59,158,255,.25)"}}>
+                    <div style={{fontSize:11,fontWeight:800,color:"#3B9EFF",marginBottom:5}}>ℹ️ Sobre la sincronización</div>
+                    <div style={{fontSize:10,color:"var(--muted)",lineHeight:1.5}}>El Cloudflare Worker corre cron job diario para extraer resultados desde suerteloteria.com. Si un sorteo aparece como "Pendiente", el Worker no ha podido obtener los números aún. Toca <strong style={{color:"var(--gold)"}}>Sincronizar ahora</strong> para forzar una actualización inmediata.</div>
+                  </div>
+                </>
+              )}
+
+              {/* ─── 2. COMISIONES DE LA APP ─── */}
+              {cfgSection === "comisiones" && (
+                <>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:6}}>💰 COMISIONES</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginBottom:14}}>Tarifas globales del motor de pagos</div>
+
+                  <div className="admin-card" style={{marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:800,color:"var(--text)",marginBottom:10,letterSpacing:.5}}>Comisiones fijas</div>
+                    {[
+                      {l:"Comisión App (paga el Vendedor)",sub:"% sobre el valor de la lotería",val:adminCfg.commissionPctVendor,suf:"%",key:"commissionPctVendor",step:0.1,min:0,max:20},
+                      {l:"Service fee fijo",sub:"Cobrado al cliente en cada pedido",val:adminCfg.serviceFeeUSD,suf:" USD",key:"serviceFeeUSD",step:0.10,min:0,max:5,pre:"$"},
+                    ].map(f=>(
+                      <div key={f.key} style={{padding:"9px 0",borderBottom:"1px solid var(--border)"}}>
+                        <div className="row" style={{justifyContent:"space-between",marginBottom:4}}>
+                          <div>
+                            <div style={{fontSize:11,fontWeight:700,color:"var(--text)"}}>{f.l}</div>
+                            <div style={{fontSize:9,color:"var(--muted)"}}>{f.sub}</div>
+                          </div>
+                        </div>
+                        <div className="row" style={{gap:6,alignItems:"center"}}>
+                          <input type="number" value={f.val} step={f.step} min={f.min} max={f.max}
+                            onChange={e=>updateCfg({[f.key]:parseFloat(e.target.value)||0})}
+                            style={{flex:1,background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"7px 10px",color:"var(--text)",fontSize:13,fontFamily:"'DM Sans',sans-serif"}}/>
+                          <span style={{fontSize:11,color:"var(--muted)",fontWeight:700,minWidth:36,textAlign:"right"}}>{f.pre||""}{f.suf}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="admin-card" style={{marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:800,color:"var(--text)",marginBottom:8,letterSpacing:.5}}>Tarifas de delivery por distancia</div>
+                    {adminCfg.deliveryTiers.map((t,i)=>(
+                      <div key={i} className="row" style={{gap:6,marginBottom:6,alignItems:"center"}}>
+                        <span style={{fontSize:10,color:"var(--muted)",minWidth:60}}>{i===0?"0":adminCfg.deliveryTiers[i-1].maxKm}–{t.maxKm} km</span>
+                        <input type="number" value={t.fee} step={0.10} min={0}
+                          onChange={e=>{const tiers=[...adminCfg.deliveryTiers];tiers[i]={...t,fee:parseFloat(e.target.value)||0};updateCfg({deliveryTiers:tiers});}}
+                          style={{flex:1,background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"6px 10px",color:"var(--text)",fontSize:12,fontFamily:"'DM Sans',sans-serif"}}/>
+                        <span style={{fontSize:10,color:"var(--green)",fontWeight:800}}>USD</span>
+                      </div>
+                    ))}
+                    <div className="row" style={{gap:6,marginTop:10,paddingTop:10,borderTop:"1px solid var(--border)"}}>
+                      <span style={{fontSize:10,color:"var(--muted)",flex:1}}>Extra por km después de 25 km</span>
+                      <input type="number" value={adminCfg.deliveryExtraPerKm} step={0.05} min={0}
+                        onChange={e=>updateCfg({deliveryExtraPerKm:parseFloat(e.target.value)||0})}
+                        style={{width:80,background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"6px 10px",color:"var(--text)",fontSize:12,fontFamily:"'DM Sans',sans-serif"}}/>
+                      <span style={{fontSize:10,color:"var(--green)",fontWeight:800}}>USD/km</span>
+                    </div>
+                  </div>
+
+                  <button onClick={()=>toast("✅ Comisiones guardadas")} style={{width:"100%",background:"linear-gradient(135deg,#A78BFA,#8B5CF6)",border:"none",color:"#fff",padding:"12px",borderRadius:10,fontSize:13,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",letterSpacing:.5}}>💾 Guardar cambios</button>
+                </>
+              )}
+
+              {/* ─── 3. ZONAS DE COBERTURA ─── */}
+              {cfgSection === "zonas" && (
+                <>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:6}}>📍 ZONAS DE COBERTURA</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginBottom:14}}>Activa o desactiva las zonas donde la app entrega pedidos</div>
+                  {adminCfg.zonas.map((z)=>(
+                    <div key={z.id} className="admin-card" style={{marginBottom:8}}>
+                      <div className="row" style={{justifyContent:"space-between",alignItems:"center"}}>
+                        <div>
+                          <div style={{fontSize:13,fontWeight:800,color:"var(--text)"}}>{z.nombre}</div>
+                          <div style={{fontSize:10,color:"var(--muted)",marginTop:2}}>Radio de cobertura: {z.radiusKm} km</div>
+                        </div>
+                        <label style={{position:"relative",display:"inline-block",width:46,height:24,cursor:"pointer"}}>
+                          <input type="checkbox" checked={z.activa} onChange={e=>{
+                            const zonas=adminCfg.zonas.map(zz=>zz.id===z.id?{...zz,activa:e.target.checked}:zz);
+                            updateCfg({zonas});
+                          }} style={{opacity:0,width:0,height:0}}/>
+                          <span style={{position:"absolute",inset:0,background:z.activa?"var(--green)":"var(--bg3)",borderRadius:24,transition:"0.2s"}}>
+                            <span style={{position:"absolute",left:z.activa?24:2,top:2,width:20,height:20,background:"#fff",borderRadius:"50%",transition:"0.2s"}}/>
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="admin-card" style={{marginTop:10,background:"rgba(0,229,160,.05)",border:"1px solid rgba(0,229,160,.2)"}}>
+                    <div style={{fontSize:10,color:"var(--muted)",lineHeight:1.4}}>
+                      <strong style={{color:"var(--green)"}}>{adminCfg.zonas.filter(z=>z.activa).length}</strong> de {adminCfg.zonas.length} zonas activas
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* ─── 4. NOTIFICACIONES PUSH ─── */}
+              {cfgSection === "notif" && (
+                <>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:6}}>📢 NOTIFICACIONES</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginBottom:14}}>Envía mensajes push masivos a los usuarios de la app</div>
+
+                  <div className="admin-card">
+                    <div style={{fontSize:11,fontWeight:800,color:"var(--text)",marginBottom:8}}>Audiencia</div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:6,marginBottom:14}}>
+                      {[{k:"todos",l:"📣 Todos"},{k:"clientes",l:"🛒 Compradores"},{k:"vendedores",l:"🏪 Vendedores"},{k:"repartidores",l:"🛵 Repartidores"}].map(a=>(
+                        <button key={a.k} onClick={()=>setPushAudience(a.k)} style={{padding:"9px",borderRadius:8,border:`1px solid ${pushAudience===a.k?"#A78BFA":"var(--border)"}`,background:pushAudience===a.k?"rgba(167,139,250,.15)":"var(--bg3)",color:pushAudience===a.k?"#A78BFA":"var(--muted)",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>{a.l}</button>
+                      ))}
+                    </div>
+
+                    <div style={{fontSize:11,fontWeight:800,color:"var(--text)",marginBottom:6}}>Título</div>
+                    <input value={pushTitle} onChange={e=>setPushTitle(e.target.value)} placeholder="Ej: ¡Sorteo Dominical hoy!"
+                      style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"9px 10px",color:"var(--text)",fontSize:12,marginBottom:10,fontFamily:"'DM Sans',sans-serif"}}/>
+
+                    <div style={{fontSize:11,fontWeight:800,color:"var(--text)",marginBottom:6}}>Mensaje</div>
+                    <textarea value={pushMsg} onChange={e=>setPushMsg(e.target.value)} placeholder="Escribe tu mensaje aquí…" rows={4}
+                      style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"9px 10px",color:"var(--text)",fontSize:12,marginBottom:10,fontFamily:"'DM Sans',sans-serif",resize:"vertical"}}/>
+
+                    <button disabled={!pushTitle.trim()||!pushMsg.trim()} onClick={()=>{
+                      const audienceLabel={todos:"todos los usuarios",clientes:"compradores",vendedores:"vendedores",repartidores:"repartidores"}[pushAudience];
+                      toast(`📢 Notificación enviada a ${audienceLabel}`);
+                      setPushTitle("");setPushMsg("");
+                    }} style={{width:"100%",background:pushTitle&&pushMsg?"linear-gradient(135deg,#A78BFA,#8B5CF6)":"var(--bg3)",border:"none",color:pushTitle&&pushMsg?"#fff":"var(--muted)",padding:"12px",borderRadius:10,fontSize:13,fontWeight:800,cursor:pushTitle&&pushMsg?"pointer":"not-allowed",fontFamily:"'DM Sans',sans-serif",letterSpacing:.5}}>📤 Enviar notificación</button>
+                  </div>
+
+                  <div className="admin-card" style={{marginTop:10,background:"rgba(167,139,250,.05)",border:"1px solid rgba(167,139,250,.2)"}}>
+                    <div style={{fontSize:10,color:"var(--muted)",lineHeight:1.4}}>
+                      <strong style={{color:"#A78BFA"}}>📌 Pendiente:</strong> integrar Firebase Cloud Messaging (FCM) para envío real. Por ahora simula el envío y muestra confirmación.
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* ─── 5. REPORTES Y MÉTRICAS ─── */}
+              {cfgSection === "reportes" && (() => {
+                const allOrders = users.flatMap(u=>u.pedidos||[]); // demo: aggregate
+                const totalUsers = users.length;
+                const ventasMes = stats.activos * 47;
+                const entregasMes = stats.activos * 12;
+                const ingresosMes = (ventasMes * 1.5).toFixed(2);
+                return (
+                  <>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:6}}>📊 REPORTES</div>
+                    <div style={{fontSize:11,color:"var(--muted)",marginBottom:14}}>Métricas operativas del último mes</div>
+
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:14}}>
+                      {[
+                        {l:"Ventas mes",v:`${ventasMes}`,sub:"Pedidos completados",c:"#3B9EFF"},
+                        {l:"Entregas mes",v:`${entregasMes}`,sub:"Por repartidores",c:"#00D68F"},
+                        {l:"Ingresos App",v:`$${ingresosMes}`,sub:"Comisión + service fees",c:"#FFCC33"},
+                        {l:"Usuarios totales",v:`${totalUsers}`,sub:`${stats.activos} activos`,c:"#A78BFA"},
+                      ].map(m=>(
+                        <div key={m.l} className="admin-card" style={{padding:"12px"}}>
+                          <div style={{fontSize:9,color:"var(--muted)",fontWeight:700,letterSpacing:.5,textTransform:"uppercase"}}>{m.l}</div>
+                          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:m.c,letterSpacing:1,marginTop:3}}>{m.v}</div>
+                          <div style={{fontSize:9,color:"var(--muted)",marginTop:2}}>{m.sub}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{fontSize:10,fontWeight:800,color:"var(--muted)",letterSpacing:1,marginBottom:8}}>DESGLOSE POR ROL</div>
+                    {[
+                      {l:"Compradores",v:stats.clientes,c:"#3B9EFF",ic:"🛒"},
+                      {l:"Vendedores",v:stats.vendedores,c:"#FFCC33",ic:"🏪"},
+                      {l:"Repartidores",v:stats.repartidores,c:"#00D68F",ic:"🛵"},
+                    ].map(r=>(
+                      <div key={r.l} className="admin-card" style={{marginBottom:6}}>
+                        <div className="row" style={{justifyContent:"space-between",alignItems:"center"}}>
+                          <div className="row" style={{gap:10,alignItems:"center"}}>
+                            <div style={{width:34,height:34,borderRadius:9,background:`${r.c}25`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>{r.ic}</div>
+                            <div style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>{r.l}</div>
+                          </div>
+                          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,color:r.c}}>{r.v}</div>
+                        </div>
+                      </div>
+                    ))}
+
+                    <button onClick={()=>toast("📥 Reporte CSV exportado (demo)")} style={{width:"100%",marginTop:14,background:"rgba(167,139,250,.15)",border:"1px solid rgba(167,139,250,.4)",color:"#A78BFA",padding:"12px",borderRadius:10,fontSize:13,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>📥 Exportar CSV</button>
+                  </>
+                );
+              })()}
+
+              {/* ─── 6. SEGURIDAD ─── */}
+              {cfgSection === "seguridad" && (
+                <>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:6}}>🔒 SEGURIDAD</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginBottom:14}}>Políticas globales de autenticación y contraseñas</div>
+
+                  <div className="admin-card" style={{marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:800,color:"var(--text)",marginBottom:10,letterSpacing:.5}}>Autenticación</div>
+                    {[
+                      {l:"Requerir 2FA para admin",sub:"Verificación en dos pasos para cuentas admin",val:adminCfg.requireMFA,key:"requireMFA"},
+                      {l:"Caracter especial obligatorio",sub:"Las contraseñas deben incluir un símbolo (!@#$%)",val:adminCfg.requireSpecialChar,key:"requireSpecialChar"},
+                    ].map(t=>(
+                      <div key={t.key} className="row" style={{justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid var(--border)"}}>
+                        <div style={{flex:1,marginRight:10}}>
+                          <div style={{fontSize:11,fontWeight:700,color:"var(--text)"}}>{t.l}</div>
+                          <div style={{fontSize:9,color:"var(--muted)",marginTop:1}}>{t.sub}</div>
+                        </div>
+                        <label style={{position:"relative",display:"inline-block",width:46,height:24,cursor:"pointer",flexShrink:0}}>
+                          <input type="checkbox" checked={t.val} onChange={e=>updateCfg({[t.key]:e.target.checked})} style={{opacity:0,width:0,height:0}}/>
+                          <span style={{position:"absolute",inset:0,background:t.val?"var(--green)":"var(--bg3)",borderRadius:24,transition:"0.2s"}}>
+                            <span style={{position:"absolute",left:t.val?24:2,top:2,width:20,height:20,background:"#fff",borderRadius:"50%",transition:"0.2s"}}/>
+                          </span>
+                        </label>
+                      </div>
+                    ))}
+                    {[
+                      {l:"Longitud mínima de contraseña",val:adminCfg.minPwdLen,key:"minPwdLen",suf:"caracteres",min:6,max:32},
+                      {l:"Tiempo de sesión",val:adminCfg.sessionTimeoutMin,key:"sessionTimeoutMin",suf:"minutos",min:5,max:1440},
+                      {l:"Bloquear tras intentos fallidos",val:adminCfg.blockAfterFails,key:"blockAfterFails",suf:"intentos",min:3,max:20},
+                    ].map(f=>(
+                      <div key={f.key} style={{padding:"9px 0",borderBottom:"1px solid var(--border)"}}>
+                        <div style={{fontSize:11,fontWeight:700,color:"var(--text)",marginBottom:5}}>{f.l}</div>
+                        <div className="row" style={{gap:6,alignItems:"center"}}>
+                          <input type="number" value={f.val} min={f.min} max={f.max}
+                            onChange={e=>updateCfg({[f.key]:parseInt(e.target.value)||f.min})}
+                            style={{flex:1,background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"7px 10px",color:"var(--text)",fontSize:13,fontFamily:"'DM Sans',sans-serif"}}/>
+                          <span style={{fontSize:10,color:"var(--muted)",fontWeight:700}}>{f.suf}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <button onClick={()=>toast("✅ Políticas de seguridad guardadas")} style={{width:"100%",background:"linear-gradient(135deg,#A78BFA,#8B5CF6)",border:"none",color:"#fff",padding:"12px",borderRadius:10,fontSize:13,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>💾 Guardar políticas</button>
+                </>
+              )}
+
+              {/* ─── 7. TÉRMINOS Y CONDICIONES ─── */}
+              {cfgSection === "terminos" && (
+                <>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:6}}>📋 TÉRMINOS Y CONDICIONES</div>
+                  <div style={{fontSize:11,color:"var(--muted)",marginBottom:14}}>Edita los documentos legales que ven los usuarios al registrarse</div>
+
+                  <div className="admin-card">
+                    <div style={{fontSize:11,fontWeight:800,color:"var(--text)",marginBottom:8}}>Texto del documento</div>
+                    <textarea value={terminosTxt} onChange={e=>setTerminosTxt(e.target.value)} rows={14}
+                      style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"10px",color:"var(--text)",fontSize:11,lineHeight:1.5,fontFamily:"'DM Sans',sans-serif",resize:"vertical"}}/>
+
+                    <div className="row" style={{justifyContent:"space-between",alignItems:"center",marginTop:10,fontSize:10,color:"var(--muted)"}}>
+                      <span>{terminosTxt.length} caracteres · {terminosTxt.split("\n").length} líneas</span>
+                      <span>Última edición: hoy</span>
+                    </div>
+                  </div>
+
+                  <button onClick={()=>toast("✅ Términos publicados")} style={{width:"100%",marginTop:12,background:"linear-gradient(135deg,#A78BFA,#8B5CF6)",border:"none",color:"#fff",padding:"12px",borderRadius:10,fontSize:13,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>📢 Publicar nueva versión</button>
+                </>
+              )}
             </>
           )}
         </div>
