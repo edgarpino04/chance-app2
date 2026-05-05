@@ -170,11 +170,12 @@ const abrirNavegacion = (order) => {
 //   route: array de [lat, lng] para dibujar ruta
 //   height: altura del mapa (default 250)
 // ═══════════════════════════════════════════════════════════════════════
-function MapaLeaflet({ center = [8.9824, -79.5199], zoom = 14, markers = [], route = null, height = 250, draggablePinIndex = null, onPinMove = null }) {
+function MapaLeaflet({ center = [8.9824, -79.5199], zoom = 14, markers = [], route = null, height = 250, draggablePinIndex = null, onPinMove = null, circles = [] }) {
   const mapRef = useRef(null);
   const containerRef = useRef(null);
   const markersRef = useRef([]);
   const routeRef = useRef(null);
+  const circlesRef = useRef([]);
 
   // Iconos personalizados según tipo
   const getIcon = (type) => {
@@ -248,11 +249,16 @@ function MapaLeaflet({ center = [8.9824, -79.5199], zoom = 14, markers = [], rou
     });
     // Auto-ajustar vista solo si no hay pin draggable (no recentrar mientras arrastra)
     if (draggablePinIndex === null) {
-      if (markers.length > 1) {
-        const bounds = window.L.latLngBounds(markers.map(m => [m.lat, m.lng]));
+      // Combinar markers + centros de círculos para el bounds
+      const allPoints = [
+        ...markers.map(m => [m.lat, m.lng]),
+        ...circles.map(c => [c.lat, c.lng]),
+      ];
+      if (allPoints.length > 1) {
+        const bounds = window.L.latLngBounds(allPoints);
         mapRef.current.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
-      } else if (markers.length === 1) {
-        mapRef.current.setView([markers[0].lat, markers[0].lng], zoom);
+      } else if (allPoints.length === 1) {
+        mapRef.current.setView(allPoints[0], zoom);
       }
     }
     return () => {
@@ -274,6 +280,27 @@ function MapaLeaflet({ center = [8.9824, -79.5199], zoom = 14, markers = [], rou
       }).addTo(mapRef.current);
     }
   }, [route]);
+
+  // Dibujar círculos de ubicación aproximada (privacidad estilo Uber Eats)
+  // circles: array de { lat, lng, radius (metros), color, label }
+  useEffect(() => {
+    if (!mapRef.current || !window.L) return;
+    // Limpiar círculos anteriores
+    circlesRef.current.forEach(c => mapRef.current.removeLayer(c));
+    circlesRef.current = [];
+    circles.forEach(c => {
+      const circle = window.L.circle([c.lat, c.lng], {
+        radius: c.radius || 300,
+        color: c.color || '#00E5A0',
+        fillColor: c.color || '#00E5A0',
+        fillOpacity: 0.15,
+        weight: 2,
+        dashArray: '6, 4',
+      }).addTo(mapRef.current);
+      if (c.label) circle.bindTooltip(c.label, { permanent: false, direction: 'top' });
+      circlesRef.current.push(circle);
+    });
+  }, [JSON.stringify(circles.map(c => [c.lat, c.lng, c.radius, c.color]))]);
 
   return (
     <div ref={containerRef} style={{
@@ -621,13 +648,19 @@ function calcOrderTotals(lotteryValue, deliveryFee, tip = '0') {
  * Flujo EFECTIVO:
  * Cliente → Repartidor: customerTotal
  * Repartidor → Vendedor: vendorReceives (ya descontada la comisión 2.5%)
- * Repartidor debe a App: serviceFee ($1.00) ← SOLO el service fee
+ * Repartidor debe a App: serviceFee ($1.00) + comisión 2.5% del vendedor
+ *   (ya que el Repartidor cobró el monto completo y retuvo la comisión que
+ *    le correspondía al Vendedor pagar a la App)
  * Repartidor retiene: driverEarnings (delivery + tip)
  */
 function calcCashFlow(t) {
   const collected     = t._customerTotal;
   const toVendor      = t._vendor;
-  const debtToApp     = t._appSvc;          // solo service fee ($1.00) — el 2.5% ya fue descontado del vendedor
+  // Repartidor cobró el monto completo del cliente. Le entrega al Vendedor
+  // su parte (lottery - 2.5%), pero la comisión 2.5% se la queda físicamente
+  // y debe transferirla a la App al cierre del día. Por eso la deuda incluye
+  // BOTH service fee ($1.00) Y la comisión 2.5%.
+  const debtToApp     = t._appSvc + t._appComm;
   const driverRetains = t._driver;
   // Verificación: cobrado - al_vendedor - deuda_app = retención_repartidor
   const check = collected - toVendor - debtToApp;
@@ -636,9 +669,11 @@ function calcCashFlow(t) {
     collectedFromCustomer: centsToStr(collected),
     paidToVendor:          centsToStr(toVendor),
     debtToApp:             centsToStr(debtToApp),
+    debtServiceFee:        centsToStr(t._appSvc),
+    debtCommission:        centsToStr(t._appComm),
     driverRetains:         centsToStr(driverRetains),
     balanced:              check === driverRetains,
-    commissionNote:        `2.5% ($${centsToStr(t._appComm)}) ya descontado al vendedor`,
+    commissionNote:        `2.5% ($${centsToStr(t._appComm)}) cobrada al cliente, debes transferirla a la App`,
   };
 }
 
@@ -654,6 +689,56 @@ function calcYappyFlow(t) {
     creditedToDriver:     centsToStr(t._driver),
     appRetains:           centsToStr(t._appTotal),
   };
+}
+
+/* ═══════════════════════════════════════════════════════
+   TARIFAS DE DELIVERY POR DISTANCIA — CHANCE
+   Best practices: Uber Eats / PedidosYa / DiDi Food adaptado a Panamá
+
+   Tier  | Distancia    | Tarifa
+   ──────┼──────────────┼─────────────────────────
+   1     | 0 – 3 km     | $2.50 (tarifa mínima)
+   2     | 3 – 6 km     | $3.50
+   3     | 6 – 10 km    | $5.00
+   4     | 10 – 15 km   | $7.00
+   5     | 15 – 25 km   | $10.00
+   6     | > 25 km      | $10.00 + $0.40/km extra
+═══════════════════════════════════════════════════════ */
+const DELIVERY_TIERS = [
+  { maxKm: 3,   fee: 2.50, label: "Zona local" },
+  { maxKm: 6,   fee: 3.50, label: "Zona cercana" },
+  { maxKm: 10,  fee: 5.00, label: "Zona media" },
+  { maxKm: 15,  fee: 7.00, label: "Zona lejana" },
+  { maxKm: 25,  fee: 10.00,label: "Zona extendida" },
+];
+const DELIVERY_EXTRA_PER_KM = 0.40; // $/km después de 25 km
+const DELIVERY_EXTRA_BASE   = 10.00;
+const DELIVERY_EXTRA_FROM   = 25;
+
+/** Calcula la tarifa de delivery según distancia en km */
+function calcDeliveryFee(distKm) {
+  if (distKm == null || isNaN(distKm) || distKm < 0) return 2.50;
+  for (const tier of DELIVERY_TIERS) {
+    if (distKm <= tier.maxKm) {
+      return { fee: tier.fee, label: tier.label, distKm: distKm.toFixed(1) };
+    }
+  }
+  // Más de 25 km: base + extra por km
+  const extraKm = distKm - DELIVERY_EXTRA_FROM;
+  const fee = DELIVERY_EXTRA_BASE + (extraKm * DELIVERY_EXTRA_PER_KM);
+  return { fee: Math.round(fee * 100) / 100, label: "Zona muy lejana", distKm: distKm.toFixed(1) };
+}
+
+/* ═══════════════════════════════════════════════════════
+   COORDENADAS DE VENDEDORES — base para cálculo de distancia
+   En producción se leen desde Firebase /ubicaciones/{vendorUserId}
+═══════════════════════════════════════════════════════ */
+const VENDOR_COORDS = {
+  "V001": { lat: 8.9824, lng: -79.5199, zone: "Calle 50 / San Francisco" },        // Carlos Medina
+  "V002": { lat: 8.9892, lng: -79.5320, zone: "El Cangrejo / Vía Argentina" },     // Rosa Jiménez
+};
+function getVendorCoords(vendorId) {
+  return VENDOR_COORDS[vendorId] || VENDOR_COORDS["V001"];
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -1791,7 +1876,18 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
 
   const subtotal=cart.reduce((a,i)=>a+i.price*i.qty,0);
   const serviceFee=1.00;
-  const deliveryFee=2.50;
+
+  // ─── Cálculo dinámico de delivery por distancia ───
+  // Origen: ubicación del vendedor del primer item del carrito
+  // Destino: GPS actual del comprador (si activo) o coords de la dirección guardada
+  const vendorIdCart = cart[0]?.vendorId || "V001";
+  const vendorCoordsCart = getVendorCoords(vendorIdCart);
+  const destLat = usarGPS && ubicGPS ? ubicGPS.lat : (addr.lat || 8.9824);
+  const destLng = usarGPS && ubicGPS ? ubicGPS.lng : (addr.lng || -79.5199);
+  const distanciaKm = calcularDistancia(vendorCoordsCart.lat, vendorCoordsCart.lng, destLat, destLng);
+  const deliveryInfo = calcDeliveryFee(distanciaKm);
+  const deliveryFee = typeof deliveryInfo === 'object' ? deliveryInfo.fee : deliveryInfo;
+  const deliveryLabel = typeof deliveryInfo === 'object' ? deliveryInfo.label : "Estándar";
   const total=subtotal+serviceFee+deliveryFee;
   const totals=calcOrderTotals(subtotal.toFixed(2), deliveryFee.toFixed(2), '0');
   const METHODS=[
@@ -1815,8 +1911,15 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
       text: addr.addr
     };
 
+    // Información del delivery calculado por distancia
+    const deliveryMeta = {
+      fee: deliveryFee.toFixed(2),
+      distKm: distanciaKm.toFixed(1),
+      label: deliveryLabel,
+    };
+
     const orderId = onConfirm
-      ? onConfirm(cart, pay==="yappy"?"YAPPY":"CASH", direccionFinal)
+      ? onConfirm(cart, pay==="yappy"?"YAPPY":"CASH", direccionFinal, deliveryMeta)
       : `CH-${2408+Math.floor(Math.random()*99)}`;
     setCart([]);
     nav({screen:"confirmacion", orderId: orderId||`CH-${Math.floor(Math.random()*9000+1000)}`});
@@ -2030,11 +2133,14 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
           ))}
           <div className="div"/>
           {[
-            {l:"Service fee (App)",v:`$${serviceFee.toFixed(2)}`},
-            {l:"Delivery",v:`$${deliveryFee.toFixed(2)}`},
-          ].map(({l,v})=>(
-            <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-              <span style={{fontSize:12,color:"var(--muted)"}}>{l}</span>
+            {l:"Service fee (App)",v:`$${serviceFee.toFixed(2)}`,sub:null},
+            {l:"Delivery",v:`$${deliveryFee.toFixed(2)}`,sub:`${deliveryLabel} · ${distanciaKm.toFixed(1)} km`},
+          ].map(({l,v,sub})=>(
+            <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:5,alignItems:"flex-start"}}>
+              <div style={{flex:1}}>
+                <span style={{fontSize:12,color:"var(--muted)"}}>{l}</span>
+                {sub&&<div style={{fontSize:9,color:"var(--muted)",opacity:.7}}>{sub}</div>}
+              </div>
               <span style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>{v}</span>
             </div>
           ))}
@@ -2120,20 +2226,47 @@ function TrackingScreen({ order }) {
     ? { lat: order.deliveryAddress.lat, lng: order.deliveryAddress.lng }
     : { lat: 8.9824, lng: -79.5199 };
 
+  // Coordenadas del vendedor (ubicación aproximada por privacidad)
+  const vendorCoords = getVendorCoords(order?.vendorId || "V001");
+
+  // Estado: ¿ya hay un repartidor asignado y en camino?
+  const repartidorActivo = order?.status === "EN_CAMINO" || order?.status === "ENTREGADO";
+
   // Construir markers según el estado del pedido
-  // NOTA: NO mostramos al vendedor por privacidad (estándar Uber Eats / DiDi Food)
+  // Mientras NO está EN_CAMINO: mostrar Vendedor (aproximado) + Comprador
+  // Cuando EN_CAMINO: mostrar Repartidor en vivo + Comprador (vendedor ya no aparece)
   const markers = [];
+  const circles = [];
+
+  // Marker del comprador (siempre visible — entregar aquí)
   markers.push({
     type: 'comprador', lat: ubicComprador.lat, lng: ubicComprador.lng,
-    label: 'Tu ubicación', popup: `<b>📍 Entregar aquí</b><br/>${order?.deliveryAddress?.text || 'Bay View Tower'}`
+    label: 'Tu ubicación', popup: `<b>📍 Entregar aquí</b><br/>${order?.deliveryAddress?.text || 'Tu dirección'}`
   });
-  // Marker del repartidor: aparece desde EN_CAMINO si tenemos cualquier ubicación
+
+  // Vendedor: solo se muestra mientras NO hay repartidor en camino
+  // Aparece como CÍRCULO de zona aproximada (~300m radio) por privacidad
+  if (!repartidorActivo && order && (order.status === "PENDIENTE" || order.status === "APROBADO")) {
+    circles.push({
+      lat: vendorCoords.lat, lng: vendorCoords.lng,
+      radius: 300,
+      color: '#00E5A0',
+      label: `🏪 Vendedor: ${vendorCoords.zone}`,
+    });
+    markers.push({
+      type: 'vendedor', lat: vendorCoords.lat, lng: vendorCoords.lng,
+      label: 'Zona del vendedor',
+      popup: `<b>🏪 ${order?.vendor || 'Vendedor'}</b><br/>Zona aproximada: ${vendorCoords.zone}`
+    });
+  }
+
+  // Marker del repartidor: aparece SOLO cuando está EN_CAMINO
   if (ubicRepartidor && ubicRepartidor.lat && ubicRepartidor.lng && order?.status === "EN_CAMINO") {
     const tiempoUlt = ubicRepartidor.timestamp ? Math.round((Date.now() - ubicRepartidor.timestamp) / 60000) : null;
     markers.push({
       type: 'repartidor', lat: ubicRepartidor.lat, lng: ubicRepartidor.lng,
       label: ubicRepartidor.activo ? 'Repartidor en vivo' : 'Última ubicación',
-      popup: `<b>🛵 Juan Rodríguez</b><br/>${ubicRepartidor.activo ? `Velocidad: ${ubicRepartidor.velocidad || 0} km/h` : `Hace ${tiempoUlt || 0} min`}`
+      popup: `<b>🛵 ${order?.repartidorName || 'Juan Rodríguez'}</b><br/>${ubicRepartidor.activo ? `Velocidad: ${ubicRepartidor.velocidad || 0} km/h` : `Hace ${tiempoUlt || 0} min`}`
     });
   }
 
@@ -2177,6 +2310,7 @@ function TrackingScreen({ order }) {
           zoom={14}
           markers={markers}
           route={route}
+          circles={circles}
           height={250}
         />
         <div style={{position:"absolute",top:10,left:10,background:"rgba(8,17,31,.92)",borderRadius:9,padding:"6px 11px",border:`1px solid ${order?.status==="ENTREGADO"?"rgba(0,229,160,.4)":order?.status==="EN_CAMINO"?"rgba(244,196,48,.4)":"rgba(147,173,204,.3)"}`,zIndex:500,pointerEvents:'none'}}>
@@ -2195,7 +2329,10 @@ function TrackingScreen({ order }) {
           </div>
         )}
       </div>
+      {/* Tarjeta del Repartidor: SOLO visible cuando está asignado (EN_CAMINO o ENTREGADO) */}
+      {repartidorActivo && (
       <div className="card" style={{marginBottom:10}}>
+        <div style={{fontSize:9,color:"var(--muted)",fontWeight:800,letterSpacing:1.5,marginBottom:6}}>REPARTIDOR ASIGNADO</div>
         <div className="row" style={{justifyContent:"space-between",marginBottom:9}}>
           <div className="row" style={{gap:9}}>
             <div style={{width:40,height:40,borderRadius:11,background:"rgba(59,158,255,.1)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Bebas Neue'",fontSize:13,color:"var(--blue)",flexShrink:0}}>JR</div>
@@ -2221,6 +2358,21 @@ function TrackingScreen({ order }) {
           </div>
         )}
       </div>
+      )}
+      {/* Mensaje informativo cuando aún no hay repartidor asignado */}
+      {!repartidorActivo && order && (
+      <div className="card" style={{marginBottom:10, background:"rgba(244,196,48,.06)", border:"1px solid rgba(244,196,48,.2)"}}>
+        <div className="row" style={{gap:10,alignItems:"center"}}>
+          <div style={{fontSize:24}}>⏳</div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:800,fontSize:12,color:"var(--gold)"}}>Esperando asignación de repartidor</div>
+            <div style={{fontSize:10,color:"var(--muted)",marginTop:2}}>
+              {order?.status === "PENDIENTE" ? "El vendedor está revisando tu pedido…" : "El vendedor ya aprobó. Asignando repartidor…"}
+            </div>
+          </div>
+        </div>
+      </div>
+      )}
       <div className="card">
         <div className="sec" style={{marginBottom:12}}>Estado del Pedido</div>
         {statusSteps.map((s,i,arr)=>{
@@ -5797,7 +5949,9 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
   const simulateDelivery = () => {
     if (!liveT) return;
     const gain = liveT._driver;
-    const debt = calcMethod==="efectivo" ? liveT._appSvc : 0;
+    // En efectivo: el Repartidor debe a la App el service fee $1.00 + la comisión 2.5%
+    // (ambos cobrados físicamente por él al cliente)
+    const debt = calcMethod==="efectivo" ? (liveT._appSvc + liveT._appComm) : 0;
     setBalance(b=>({
       wallet:b.wallet+gain, debtToApp:b.debtToApp+debt, earned:b.earned+gain,
       deliveries:b.deliveries+1,
@@ -5903,12 +6057,29 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
         </div>
         <div className="card" style={{marginBottom:10}}>
           <div className="sec" style={{marginBottom:9}}>Estructura de Comisiones</div>
-          {[["Comisión 2.5% → paga el VENDEDOR","—","var(--gold)"],["Service fee $1.00 (efectivo: debes a App)","−$1.00","var(--red)"],["Delivery fee → 100% para ti","100%","var(--green)"],["Propina → 100% para ti","100%","var(--green)"]].map(([l,v,c])=>(
-            <div key={l} className="row" style={{justifyContent:"space-between",marginBottom:7}}>
-              <div className="row" style={{gap:7}}><div style={{width:7,height:7,borderRadius:2,background:c,flexShrink:0}}/><span style={{fontSize:11,color:"var(--muted)"}}>{l}</span></div>
-              <span style={{fontSize:11,fontWeight:800,color:c}}>{v}</span>
+          {[
+            ["Comisión 2.5% del Vendedor","efectivo: debes a App","var(--orange)","2.5%"],
+            ["Service fee $1.00","efectivo: debes a App","var(--red)","−$1.00"],
+            ["Delivery fee","100% para ti","var(--green)","100%"],
+            ["Propina","100% para ti","var(--green)","100%"],
+          ].map(([l,sub,c,v])=>(
+            <div key={l} className="row" style={{justifyContent:"space-between",marginBottom:7,alignItems:"flex-start"}}>
+              <div className="row" style={{gap:7,alignItems:"flex-start",flex:1}}>
+                <div style={{width:7,height:7,borderRadius:2,background:c,flexShrink:0,marginTop:5}}/>
+                <div>
+                  <div style={{fontSize:11,color:"var(--text)",fontWeight:600}}>{l}</div>
+                  <div style={{fontSize:9,color:"var(--muted)",marginTop:1}}>{sub}</div>
+                </div>
+              </div>
+              <span style={{fontSize:11,fontWeight:800,color:c,flexShrink:0}}>{v}</span>
             </div>
           ))}
+          <div style={{background:"rgba(255,140,85,.07)",border:"1px solid rgba(255,140,85,.2)",borderRadius:9,padding:"7px 11px",marginTop:8}}>
+            <div style={{fontSize:10,color:"var(--orange)",fontWeight:800,marginBottom:2}}>ℹ️ Cómo funciona en efectivo</div>
+            <div style={{fontSize:10,color:"var(--muted)",lineHeight:1.4}}>
+              Tú cobras el monto completo al cliente. Le pagas al Vendedor el valor de la lotería menos su 2.5%. Esa comisión <strong style={{color:"var(--orange)"}}>+ el service fee $1.00</strong> los debes a la App. Se descontarán automáticamente de tu billetera al cierre del día.
+            </div>
+          </div>
           <div style={{background:"rgba(244,196,48,.07)",border:"1px solid rgba(244,196,48,.18)",borderRadius:9,padding:"7px 11px",marginTop:8}}>
             <div style={{fontSize:10,color:"var(--gold)",fontWeight:800,marginBottom:2}}>💡 Yappy recomendado</div>
             <div style={{fontSize:10,color:"var(--muted)"}}>Con Yappy no manejas efectivo y la App distribuye todo automáticamente.</div>
@@ -6718,7 +6889,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
   // ── HELPERS ──────────────────────────────────────────────────────────────
 
   /** Crear UN solo pedido consolidado con todos los items del carrito */
-  const placeOrder = (items, method, addr) => {
+  const placeOrder = (items, method, addr, deliveryMeta) => {
     if (!items?.length) return null;
     const id = `CH-${2408 + sharedOrders.length}`;
     const lotteryTotal = items.reduce((s,i) => s + i.price * i.qty, 0);
@@ -6733,7 +6904,11 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       items:items.map(i=>({type:i.type,num:i.num,qty:i.qty,price:i.price,subtotal:(i.price*i.qty).toFixed(2)})),
       itemCount:items.length, vendor:items[0].vendor||"Carlos Medina V001",
       vendorId:items[0].vendorId||"V001", lotteryValue:lotteryTotal.toFixed(2),
-      deliveryFee:"2.50", tip:"0", paymentMethod:method,
+      // Delivery dinámico según distancia (fallback $2.50 si no se calculó)
+      deliveryFee: deliveryMeta?.fee || "2.50",
+      deliveryDistKm: deliveryMeta?.distKm || null,
+      deliveryLabel:  deliveryMeta?.label  || "Estándar",
+      tip:"0", paymentMethod:method,
       deliveryAddr:addr?.label||"Casa",
       // ─── NUEVO: Dirección completa con coordenadas para GPS/navegación ───
       deliveryAddress: {
