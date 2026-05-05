@@ -102,11 +102,13 @@ const calcularETA = (distKm, velocidadKmh = 25) => {
 
 // ─── Abrir Waze / Google Maps con la dirección del pedido ───
 // Detecta el dispositivo y ofrece opciones de navegación
-const abrirNavegacion = (order) => {
-  // Obtener coordenadas del pedido (con fallbacks)
-  const lat = order?.deliveryAddress?.lat || order?.coordinates?.lat || 8.9824;
-  const lng = order?.deliveryAddress?.lng || order?.coordinates?.lng || -79.5199;
-  const direccion = order?.deliveryAddress?.text || order?.deliveryAddress || "Cliente";
+// Si se pasa `destinoCustom = {lat, lng, label}`, usa ese destino en lugar
+// de la dirección de entrega del pedido (útil para fase de PICKUP del vendedor).
+const abrirNavegacion = (order, destinoCustom = null) => {
+  // Obtener coordenadas del destino (custom > delivery > fallback)
+  const lat = destinoCustom?.lat ?? order?.deliveryAddress?.lat ?? order?.coordinates?.lat ?? 8.9824;
+  const lng = destinoCustom?.lng ?? order?.deliveryAddress?.lng ?? order?.coordinates?.lng ?? -79.5199;
+  const direccion = destinoCustom?.label || order?.deliveryAddress?.text || order?.deliveryAddress || "Cliente";
 
   // Detectar plataforma
   const ua = navigator.userAgent || '';
@@ -736,11 +738,13 @@ function calcDeliveryFee(distKm) {
 
 /* ═══════════════════════════════════════════════════════
    COORDENADAS DE VENDEDORES — base para cálculo de distancia
+   y datos de contacto para la fase de PICKUP del repartidor.
    En producción se leen desde Firebase /ubicaciones/{vendorUserId}
+   y desde el perfil del vendedor.
 ═══════════════════════════════════════════════════════ */
 const VENDOR_COORDS = {
-  "V001": { lat: 8.9824, lng: -79.5199, zone: "Calle 50 / San Francisco" },        // Carlos Medina
-  "V002": { lat: 8.9892, lng: -79.5320, zone: "El Cangrejo / Vía Argentina" },     // Rosa Jiménez
+  "V001": { lat: 8.9824, lng: -79.5199, zone: "Calle 50 / San Francisco",     name: "Carlos Medina", phone: "6111-2233", address: "Calle 50, esquina con Vía España, local 12" },
+  "V002": { lat: 8.9892, lng: -79.5320, zone: "El Cangrejo / Vía Argentina",  name: "Rosa Jiménez",  phone: "6444-5566", address: "Vía Argentina 45, esquina con Av. 2A Norte" },
 };
 function getVendorCoords(vendorId) {
   return VENDOR_COORDS[vendorId] || VENDOR_COORDS["V001"];
@@ -6328,16 +6332,54 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
           const cf=o.paymentMethod==="CASH"?calcCashFlow(et):null;
           const isInTransit=o.status==="EN_CAMINO";
           const isDelivered=o.status==="ENTREGADO";
+          const isApproved=o.status==="APROBADO";
           const itemList = o.items || [{type:o.type,num:o.num,qty:o.qty||1,subtotal:o.lotteryValue||"1.00"}];
+
+          // ─── FASES DEL DELIVERY (estilo Uber Eats / Rappi / DiDi Food) ───
+          // FASE 1 — PICKUP: status APROBADO → Repartidor va al VENDEDOR a recoger
+          // FASE 2 — DROPOFF: status EN_CAMINO → Repartidor lleva al CLIENTE
+          const fase = isApproved ? "pickup" : isInTransit ? "dropoff" : isDelivered ? "done" : "espera";
+          const vendorInfo = getVendorCoords(o.vendorId || "V001");
+
           return (
-            <div key={o.id} className="card" style={{marginBottom:9,border:isInTransit?"1px solid rgba(59,158,255,.3)":isDelivered?"1px solid rgba(0,214,143,.2)":"1px solid rgba(0,214,143,.3)"}}>
+            <div key={o.id} className="card" style={{marginBottom:9,border:isInTransit?"1px solid rgba(59,158,255,.3)":isDelivered?"1px solid rgba(0,214,143,.2)":isApproved?"1px solid rgba(244,196,48,.4)":"1px solid rgba(147,173,204,.2)"}}>
               <div className="row" style={{justifyContent:"space-between",marginBottom:7}}>
                 <div>
                   <span style={{fontSize:10,color:"var(--muted)",fontWeight:700}}>{o.id}</span>
                   {itemList.length>1&&<span style={{marginLeft:7,fontSize:9,fontWeight:800,color:"var(--blue)",background:"rgba(59,158,255,.1)",borderRadius:7,padding:"2px 6px"}}>{itemList.length} items</span>}
                 </div>
-                <span className={`badge ${isDelivered?"bg":isInTransit?"bb":o.status==="APROBADO"?"by":"br"}`}>{isDelivered?"📦 Entregado":isInTransit?"🛵 En Camino":o.status==="APROBADO"?"✅ Aprobado":"⏳ Pendiente vendedor"}</span>
+                <span className={`badge ${isDelivered?"bg":isInTransit?"bb":isApproved?"by":"br"}`}>{isDelivered?"📦 Entregado":isInTransit?"🛵 En Camino":isApproved?"📦 Recoger":"⏳ Pendiente vendedor"}</span>
               </div>
+
+              {/* Indicador de fase: Pickup → Dropoff (timeline horizontal) */}
+              {(isApproved || isInTransit) && (
+                <div style={{background:"var(--bg3)",borderRadius:9,padding:"8px 10px",marginBottom:8}}>
+                  <div className="row" style={{gap:6,alignItems:"center"}}>
+                    {/* Step 1: Recogida */}
+                    <div style={{display:"flex",alignItems:"center",gap:5,flex:1}}>
+                      <div style={{width:22,height:22,borderRadius:"50%",background:fase==="pickup"?"var(--gold)":"var(--green)",color:"#08111F",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:11,flexShrink:0}}>
+                        {fase==="pickup" ? "1" : "✓"}
+                      </div>
+                      <div style={{minWidth:0}}>
+                        <div style={{fontSize:9,fontWeight:800,color:fase==="pickup"?"var(--gold)":"var(--green)",letterSpacing:.5}}>RECOGER</div>
+                        <div style={{fontSize:9,color:"var(--muted)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Vendedor</div>
+                      </div>
+                    </div>
+                    {/* Línea conectora */}
+                    <div style={{flex:0.5,height:2,background:fase==="dropoff"?"var(--green)":"var(--border)",minWidth:14}}/>
+                    {/* Step 2: Entrega */}
+                    <div style={{display:"flex",alignItems:"center",gap:5,flex:1,justifyContent:"flex-end"}}>
+                      <div style={{minWidth:0,textAlign:"right"}}>
+                        <div style={{fontSize:9,fontWeight:800,color:fase==="dropoff"?"var(--blue)":"var(--muted)",letterSpacing:.5}}>ENTREGAR</div>
+                        <div style={{fontSize:9,color:"var(--muted)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Cliente</div>
+                      </div>
+                      <div style={{width:22,height:22,borderRadius:"50%",background:fase==="dropoff"?"var(--blue)":"var(--bg2)",border:fase==="dropoff"?"none":"1px solid var(--border)",color:fase==="dropoff"?"#08111F":"var(--muted)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:11,flexShrink:0}}>
+                        2
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Todos los items del pedido consolidado */}
               <div style={{background:"var(--bg3)",borderRadius:9,padding:"8px 10px",marginBottom:8}}>
@@ -6355,29 +6397,58 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
                 ))}
               </div>
 
-              <div style={{fontSize:10,color:"var(--muted)",marginBottom:3}}>📍 {o.deliveryAddress?.text||o.deliveryAddr||"Panamá"}</div>
-
-              {/* Card del cliente con botones de contacto */}
-              {(isInTransit || o.status==="APROBADO") && (
-                <div style={{background:"rgba(0,229,160,.06)",border:"1px solid rgba(0,229,160,.2)",borderRadius:9,padding:"8px 10px",marginBottom:8}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                    <div>
-                      <div style={{fontSize:8,color:"var(--muted)",fontWeight:700,textTransform:"uppercase",marginBottom:1}}>Cliente</div>
-                      <div style={{fontSize:11,fontWeight:800,color:"var(--text)"}}>{o.customerName||"Cliente"}</div>
-                      <div style={{fontSize:9,color:"var(--blue)",fontWeight:700,marginTop:1}}>📞 {o.customerPhone||"6555-1234"}</div>
+              {/* ═══════════════════════════════════════════════════════════
+                   FASE 1 — RECOGER DEL VENDEDOR (status: APROBADO)
+                   Muestra dirección y contacto del VENDEDOR
+              ═══════════════════════════════════════════════════════════ */}
+              {fase === "pickup" && (
+                <div style={{background:"rgba(244,196,48,.08)",border:"1px solid rgba(244,196,48,.3)",borderRadius:9,padding:"10px 11px",marginBottom:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:8,color:"var(--gold)",fontWeight:800,textTransform:"uppercase",letterSpacing:1,marginBottom:2}}>🏪 Recoger en</div>
+                      <div style={{fontSize:12,fontWeight:800,color:"var(--text)"}}>{vendorInfo.name}</div>
+                      <div style={{fontSize:10,color:"var(--muted)",marginTop:1,lineHeight:1.3}}>📍 {vendorInfo.address}</div>
+                      <div style={{fontSize:9,color:"var(--gold)",marginTop:2}}>{vendorInfo.zone}</div>
                     </div>
                   </div>
                   <div style={{display:"flex",gap:5}}>
-                    <a href={`tel:+507${(o.customerPhone||"6555-1234").replace(/-/g,"")}`} style={{flex:1,padding:"6px",borderRadius:7,background:"rgba(0,214,143,.12)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:9,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
-                      📞 Llamar
+                    <a href={`tel:+507${(vendorInfo.phone||"").replace(/-/g,"")}`} style={{flex:1,padding:"7px",borderRadius:7,background:"rgba(244,196,48,.12)",border:"1px solid rgba(244,196,48,.3)",color:"var(--gold)",fontSize:10,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+                      📞 Llamar vendedor
                     </a>
-                    <a href={`https://wa.me/507${(o.customerPhone||"6555-1234").replace(/-/g,"")}`} target="_blank" rel="noopener" style={{flex:1,padding:"6px",borderRadius:7,background:"rgba(0,214,143,.12)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:9,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+                    <a href={`https://wa.me/507${(vendorInfo.phone||"").replace(/-/g,"")}`} target="_blank" rel="noopener" style={{flex:1,padding:"7px",borderRadius:7,background:"rgba(0,214,143,.12)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:10,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
                       💬 WhatsApp
                     </a>
-                    <a href={`sms:+507${(o.customerPhone||"6555-1234").replace(/-/g,"")}`} style={{flex:1,padding:"6px",borderRadius:7,background:"rgba(59,158,255,.12)",border:"1px solid rgba(59,158,255,.3)",color:"var(--blue)",fontSize:9,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
-                      📩 SMS
-                    </a>
                   </div>
+                </div>
+              )}
+
+              {/* ═══════════════════════════════════════════════════════════
+                   FASE 2 — ENTREGAR AL CLIENTE (status: EN_CAMINO o ENTREGADO)
+                   Muestra dirección y contacto del CLIENTE
+              ═══════════════════════════════════════════════════════════ */}
+              {(fase === "dropoff" || fase === "done") && (
+                <div style={{background:"rgba(0,229,160,.06)",border:"1px solid rgba(0,229,160,.2)",borderRadius:9,padding:"10px 11px",marginBottom:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:8,color:"var(--green)",fontWeight:800,textTransform:"uppercase",letterSpacing:1,marginBottom:2}}>📍 Entregar a</div>
+                      <div style={{fontSize:12,fontWeight:800,color:"var(--text)"}}>{o.customerName||"Cliente"}</div>
+                      <div style={{fontSize:10,color:"var(--muted)",marginTop:1,lineHeight:1.3}}>📍 {o.deliveryAddress?.text||o.deliveryAddr||"Panamá"}</div>
+                      <div style={{fontSize:9,color:"var(--blue)",fontWeight:700,marginTop:2}}>📞 {o.customerPhone||"6555-1234"}</div>
+                    </div>
+                  </div>
+                  {!isDelivered && (
+                    <div style={{display:"flex",gap:5}}>
+                      <a href={`tel:+507${(o.customerPhone||"6555-1234").replace(/-/g,"")}`} style={{flex:1,padding:"6px",borderRadius:7,background:"rgba(0,214,143,.12)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:9,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+                        📞 Llamar
+                      </a>
+                      <a href={`https://wa.me/507${(o.customerPhone||"6555-1234").replace(/-/g,"")}`} target="_blank" rel="noopener" style={{flex:1,padding:"6px",borderRadius:7,background:"rgba(0,214,143,.12)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:9,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+                        💬 WhatsApp
+                      </a>
+                      <a href={`sms:+507${(o.customerPhone||"6555-1234").replace(/-/g,"")}`} style={{flex:1,padding:"6px",borderRadius:7,background:"rgba(59,158,255,.12)",border:"1px solid rgba(59,158,255,.3)",color:"var(--blue)",fontSize:9,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+                        📩 SMS
+                      </a>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -6392,44 +6463,61 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
               </div>
 
               <div className="row" style={{gap:7,justifyContent:"flex-end",flexWrap:"wrap"}}>
-                {/* Botón "Esperando vendedor" cuando el pedido aún no está aprobado */}
-                {!isDelivered && !isInTransit && o.status !== "APROBADO" && (
+                {/* Estado: PENDIENTE — Esperando aprobación del vendedor */}
+                {fase === "espera" && (
                   <div style={{padding:"7px 13px",background:"rgba(244,196,48,.08)",border:"1px dashed rgba(244,196,48,.3)",borderRadius:9,color:"var(--gold)",fontSize:11,fontWeight:700,fontFamily:"'DM Sans'",display:"flex",alignItems:"center",gap:5}}>
                     ⏳ Esperando aprobación del vendedor
                   </div>
                 )}
-                {/* Botón Cómo llegar (Waze / Google Maps) - aparece si está EN_CAMINO o APROBADO */}
-                {(isInTransit || (!isDelivered && o.status === "APROBADO")) && (
-                  <button onClick={()=>abrirNavegacion(o)} style={{padding:"7px 13px",background:"rgba(244,196,48,.12)",border:"1px solid rgba(244,196,48,.3)",borderRadius:9,color:"var(--gold)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'",display:"flex",alignItems:"center",gap:5}}>
-                    🗺️ Cómo llegar
-                  </button>
+
+                {/* FASE 1 — PICKUP: navegar al vendedor + confirmar recogida */}
+                {fase === "pickup" && (
+                  <>
+                    <button onClick={()=>abrirNavegacion(o, {lat: vendorInfo.lat, lng: vendorInfo.lng, label: `🏪 ${vendorInfo.name} · ${vendorInfo.zone}`})}
+                      style={{padding:"7px 13px",background:"rgba(244,196,48,.12)",border:"1px solid rgba(244,196,48,.3)",borderRadius:9,color:"var(--gold)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'",display:"flex",alignItems:"center",gap:5}}>
+                      🗺️ Cómo llegar al vendedor
+                    </button>
+                    {onAssign && (
+                      <button onClick={async ()=>{
+                        // Capturar ubicación inicial antes de marcar EN_CAMINO
+                        try {
+                          const pos = await new Promise((resolve, reject) => {
+                            navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 8000 });
+                          });
+                          await fbWrite(`ubicaciones/repartidor_juan`, {
+                            lat: pos.coords.latitude,
+                            lng: pos.coords.longitude,
+                            timestamp: Date.now(),
+                            precision: pos.coords.accuracy,
+                            velocidad: 0,
+                            activo: true
+                          });
+                        } catch(e) {
+                          console.warn("No se pudo obtener GPS inicial:", e.message);
+                        }
+                        // Marcar como EN_CAMINO (recogió → ahora va al cliente)
+                        onAssign(o.id);
+                        // Sugerir navegación al cliente automáticamente
+                        setTimeout(() => abrirNavegacion(o), 300);
+                      }} style={{padding:"7px 13px",background:"linear-gradient(135deg,#00E5A0,#00C088)",border:"none",borderRadius:9,color:"#08111F",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                        ✅ Recogí el pedido
+                      </button>
+                    )}
+                  </>
                 )}
-                {/* Botón Iniciar entrega: SOLO si está APROBADO (vendedor ya aceptó) */}
-                {!isDelivered && !isInTransit && o.status === "APROBADO" && onAssign && (
-                  <button onClick={async ()=>{
-                    // Capturar ubicación inicial antes de iniciar entrega
-                    try {
-                      const pos = await new Promise((resolve, reject) => {
-                        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 8000 });
-                      });
-                      // Enviar ubicación inicial a Firebase inmediatamente
-                      await fbWrite(`ubicaciones/repartidor_juan`, {
-                        lat: pos.coords.latitude,
-                        lng: pos.coords.longitude,
-                        timestamp: Date.now(),
-                        precision: pos.coords.accuracy,
-                        velocidad: 0,
-                        activo: true
-                      });
-                    } catch(e) {
-                      console.warn("No se pudo obtener GPS inicial:", e.message);
-                    }
-                    onAssign(o.id);
-                    abrirNavegacion(o);
-                  }} style={{padding:"7px 13px",background:"rgba(59,158,255,.12)",border:"1px solid rgba(59,158,255,.3)",borderRadius:9,color:"var(--blue)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>🛵 Iniciar entrega</button>
-                )}
-                {isInTransit&&onDeliver&&(
-                  <button onClick={()=>handleDeliver(o.id)} style={{padding:"7px 13px",background:"rgba(0,214,143,.12)",border:"1px solid rgba(0,214,143,.3)",borderRadius:9,color:"var(--green)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>✓ Marcar Entregado</button>
+
+                {/* FASE 2 — DROPOFF: navegar al cliente + marcar entregado */}
+                {fase === "dropoff" && (
+                  <>
+                    <button onClick={()=>abrirNavegacion(o)} style={{padding:"7px 13px",background:"rgba(59,158,255,.12)",border:"1px solid rgba(59,158,255,.3)",borderRadius:9,color:"var(--blue)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'",display:"flex",alignItems:"center",gap:5}}>
+                      🗺️ Cómo llegar al cliente
+                    </button>
+                    {onDeliver && (
+                      <button onClick={()=>handleDeliver(o.id)} style={{padding:"7px 13px",background:"linear-gradient(135deg,#00D68F,#00B077)",border:"none",borderRadius:9,color:"#08111F",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                        ✓ Marcar entregado
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             </div>
