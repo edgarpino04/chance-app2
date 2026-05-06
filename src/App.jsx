@@ -1111,6 +1111,9 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[] }) {
   const countdown = useCountdown("2026-04-08T15:00:00");
   const [sorteoTab, setSorteoTab] = useState("MIERCOLITO");
   const [, forceRefresh] = useState(0);
+  // Estado del botón Refrescar del banner "Verificando resultado oficial"
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState("");
   const cartCount = cart.reduce((a,i)=>a+i.qty,0);
   const modifiedOrders    = activeOrders.filter(o=>o.status==="MODIFICADO");
   const vendorCancelledOrders = activeOrders.filter(o=>o.status==="CANCELADO_VENDEDOR");
@@ -1209,9 +1212,32 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[] }) {
             <span style={{fontSize:14}}>⏳</span>
             <div style={{flex:1}}>
               <div style={{fontSize:10,fontWeight:800,color:"var(--gold)"}}>Verificando resultado oficial…</div>
-              <div style={{fontSize:9,color:"var(--muted)"}}>Sincronizando con Lotería Nacional. Los números se actualizarán automáticamente.</div>
+              <div style={{fontSize:9,color:"var(--muted)"}}>{refreshMsg || "Sincronizando con Lotería Nacional. Los números se actualizarán automáticamente."}</div>
             </div>
-            <button onClick={()=>cargarSorteosAutomaticos()} style={{background:"rgba(244,196,48,.2)",border:"none",borderRadius:7,padding:"4px 8px",fontSize:9,fontWeight:800,color:"var(--gold)",cursor:"pointer"}}>Refrescar</button>
+            <button
+              disabled={refreshing}
+              onClick={async ()=>{
+                setRefreshing(true);
+                setRefreshMsg("Consultando Lotería Nacional…");
+                try {
+                  const ok = await cargarSorteosAutomaticos();
+                  if (ok) {
+                    setRefreshMsg("✅ Sincronizado con LNB");
+                    setTimeout(() => { setRefreshMsg(""); setRefreshing(false); }, 1500);
+                  } else {
+                    setRefreshMsg(UPDATER_URL.includes("AJUSTAR")
+                      ? "⚠️ Worker no configurado"
+                      : "⚠️ LNB aún no publica este sorteo. Reintenta en unos minutos.");
+                    setTimeout(() => setRefreshing(false), 2000);
+                  }
+                } catch(e) {
+                  setRefreshMsg("⚠️ Error de conexión");
+                  setTimeout(() => setRefreshing(false), 2000);
+                }
+              }}
+              style={{background:refreshing?"rgba(244,196,48,.08)":"rgba(244,196,48,.2)",border:"none",borderRadius:7,padding:"4px 8px",fontSize:9,fontWeight:800,color:"var(--gold)",cursor:refreshing?"wait":"pointer",opacity:refreshing?0.6:1,minWidth:54}}>
+              {refreshing ? "⏳…" : "Refrescar"}
+            </button>
           </div>
         )}
         {/* Premios */}
@@ -2255,8 +2281,14 @@ function TrackingScreen({ order }) {
     ? { lat: order.deliveryAddress.lat, lng: order.deliveryAddress.lng }
     : { lat: 8.9824, lng: -79.5199 };
 
-  // Coordenadas del vendedor (ubicación aproximada por privacidad)
-  const vendorCoords = getVendorCoords(order?.vendorId || "V001");
+  // ─── Coordenadas del vendedor (ubicación REAL desde Firebase, aproximada por privacidad) ───
+  // Prioridad: 1) GPS en vivo del vendedor desde Firebase, 2) coords estáticas del lookup
+  const vendedorIdReal = order?.vendorUserId || "vendedor_carlos";
+  const ubicVendedorFB = useUbicacionUsuario(vendedorIdReal);
+  const vendorStatic = getVendorCoords(order?.vendorId || "V001");
+  const vendorCoords = ubicVendedorFB && ubicVendedorFB.lat && ubicVendedorFB.lng
+    ? { lat: ubicVendedorFB.lat, lng: ubicVendedorFB.lng, zone: vendorStatic.zone, name: vendorStatic.name, address: vendorStatic.address, phone: vendorStatic.phone, fuente: "GPS" }
+    : { ...vendorStatic, fuente: "static" };
 
   // Estado: ¿ya hay un repartidor asignado y en camino?
   const repartidorActivo = order?.status === "EN_CAMINO" || order?.status === "ENTREGADO";
@@ -2274,18 +2306,20 @@ function TrackingScreen({ order }) {
   });
 
   // Vendedor: solo se muestra mientras NO hay repartidor en camino
-  // Aparece como CÍRCULO de zona aproximada (~300m radio) por privacidad
+  // Aparece como CÍRCULO de zona aproximada (~600m radio) por privacidad
+  // El radio amplio también ayuda a probar con el mismo dispositivo (vendedor + comprador
+  // en la misma posición GPS no se solapan visualmente).
   if (!repartidorActivo && order && (order.status === "PENDIENTE" || order.status === "APROBADO")) {
     circles.push({
       lat: vendorCoords.lat, lng: vendorCoords.lng,
-      radius: 300,
+      radius: 600,
       color: '#00E5A0',
       label: `🏪 Vendedor: ${vendorCoords.zone}`,
     });
     markers.push({
       type: 'vendedor', lat: vendorCoords.lat, lng: vendorCoords.lng,
       label: 'Zona del vendedor',
-      popup: `<b>🏪 ${order?.vendor || 'Vendedor'}</b><br/>Zona aproximada: ${vendorCoords.zone}`
+      popup: `<b>🏪 ${order?.vendor || vendorCoords.name || 'Vendedor'}</b><br/>Zona aproximada: ${vendorCoords.zone}${vendorCoords.fuente === "GPS" ? '<br/><i>📡 Ubicación en vivo</i>' : ''}`
     });
   }
 
@@ -2333,9 +2367,12 @@ function TrackingScreen({ order }) {
       )}
 
       {/* Mapa real con Leaflet + tracking en vivo */}
+      {/* Centrado inteligente: mientras prepara, centra en vendedor; en camino, centra en comprador */}
       <div style={{position:"relative", marginBottom:10}}>
         <MapaLeaflet
-          center={[ubicComprador.lat, ubicComprador.lng]}
+          center={!repartidorActivo && order && (order.status === "PENDIENTE" || order.status === "APROBADO")
+            ? [vendorCoords.lat, vendorCoords.lng]
+            : [ubicComprador.lat, ubicComprador.lng]}
           zoom={14}
           markers={markers}
           route={route}
@@ -4592,21 +4629,24 @@ function SuerteScreen() {
 
   // ── ANÁLISIS ESTADÍSTICO basado en HISTORIAL real ──
   const calcStats = (num) => {
-    const chances = HISTORIAL.flatMap(h => {
-      if (h.tipo === "GORDITO") return h.premios.filter(p => p.num.length <= 2).map(p => p.num.padStart(2, "0"));
-      const prim = h.premios[0]?.num || "";
-      if (prim.length === 4) return [prim.slice(-2)];
+    // ─── Helper: extrae los chances (terminaciones de 2 dígitos) de un sorteo ───
+    // Considera los 3 premios. Para billetes de 4-5 dígitos, los últimos 2 dígitos
+    // forman el chance ganador (estándar Lotería Nacional Panamá).
+    const extraerChances = (h) => h.premios.flatMap(p => {
+      const n = p.num || "";
+      if (n.length <= 2) return [n.padStart(2, "0")];
+      if (n.length === 4 || n.length === 5) return [n.slice(-2)];
       return [];
     });
 
-    const total = chances.length;
-    const freq = chances.filter(n => n === num).length;
-    const pct = total > 0 ? ((freq / total) * 100).toFixed(1) : "0.0";
+    // Total de sorteos en el historial (no chances individuales)
+    const total = HISTORIAL.length;
+    // Sorteos en los que el número salió como cualquiera de los 3 premios
+    const sorteosConMatch = HISTORIAL.filter(h => extraerChances(h).includes(num)).length;
 
-    // ─── Detalle de apariciones: lista de cada sorteo donde salió este número ───
-    // Por cada sorteo del HISTORIAL, revisamos los 3 premios y guardamos los matches.
-    // Para billetes (4 dígitos) consideramos que el chance "07" apareció si los
-    // últimos 2 dígitos del billete coinciden (estándar Lotería Nacional Panamá).
+    // ─── Detalle de apariciones: lista de cada PREMIO donde salió este número ───
+    // Un mismo sorteo puede aparecer múltiples veces si el chance salió como
+    // 1er Y 2do premio, por ejemplo.
     const apariciones = [];
     for (const h of HISTORIAL) {
       h.premios.forEach((p, idx) => {
@@ -4614,13 +4654,11 @@ function SuerteScreen() {
         let coincide = false;
         let etiqueta = "";
         if (num4.length <= 2) {
-          // Premio de chance directo (Gordito 2 dígitos)
           if (num4.padStart(2, "0") === num) {
             coincide = true;
             etiqueta = num4.padStart(2, "0");
           }
         } else if (num4.length === 4 || num4.length === 5) {
-          // Premio de billete: el chance corresponde a los últimos 2 dígitos
           if (num4.slice(-2) === num) {
             coincide = true;
             etiqueta = num4;
@@ -4647,33 +4685,31 @@ function SuerteScreen() {
       return parseInt(b.sorteoN || 0) - parseInt(a.sorteoN || 0);
     });
 
+    // freq = número de premios donde salió (coincide con apariciones.length y con
+    // el badge "N veces" de la sección Detalle de apariciones)
+    const freq = apariciones.length;
+    const pct = total > 0 ? ((sorteosConMatch / total) * 100).toFixed(1) : "0.0";
+
     let ultimaSalida = null;
     let sorteosSinSalir = 0;
     let encontrado = false;
     for (let i = 0; i < HISTORIAL.length; i++) {
       const h = HISTORIAL[i];
-      const nums = h.premios.flatMap(p => {
-        if (p.num.length <= 2) return [p.num.padStart(2, "0")];
-        if (p.num.length === 4) return [p.num.slice(-2)];
-        return [];
-      });
       if (!encontrado) {
-        if (nums.includes(num)) { ultimaSalida = h.fecha; encontrado = true; }
+        if (extraerChances(h).includes(num)) { ultimaSalida = h.fecha; encontrado = true; }
         else sorteosSinSalir++;
       }
     }
 
     const ultimos10 = HISTORIAL.filter(h => h.tipo === "GORDITO").slice(0, 10);
-    const freq10 = ultimos10.filter(h =>
-      h.premios.some(p => p.num.padStart(2, "0") === num || p.num.slice(-2) === num)
-    ).length;
+    const freq10 = ultimos10.filter(h => extraerChances(h).includes(num)).length;
 
     const caliente = sorteosSinSalir < 5;
     const probabilidad = Math.min(99, Math.max(1, Math.round(
       (freq10 * 15) + (freq * 2) + (caliente ? 20 : 5) + Math.random() * 10
     )));
 
-    return { freq, total, pct, ultimaSalida, sorteosSinSalir, caliente, probabilidad, freq10, apariciones };
+    return { freq, total, sorteosConMatch, pct, ultimaSalida, sorteosSinSalir, caliente, probabilidad, freq10, apariciones };
   };
 
   const stats = calcStats(numSelected);
@@ -4890,7 +4926,8 @@ function SuerteScreen() {
           <div style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text)", marginBottom: 12, letterSpacing: .5 }}>📈 Detalle estadístico del número <span style={{ color: GOLD, fontFamily: "'Bebas Neue',sans-serif", fontSize: 16 }}>{numSelected}</span></div>
             {[
-              { ic: "🔢", l: "Apariciones históricas", v: `${stats.freq} de ${stats.total} sorteos` },
+              { ic: "🏆", l: "Apariciones como premio", v: `${stats.freq} ${stats.freq === 1 ? "vez" : "veces"}` },
+              { ic: "🔢", l: "Sorteos donde salió", v: `${stats.sorteosConMatch} de ${stats.total}` },
               { ic: "📅", l: "Último sorteo que salió", v: stats.ultimaSalida || "No registrado" },
               { ic: "⏳", l: "Sorteos sin aparecer", v: `${stats.sorteosSinSalir} sorteos` },
               { ic: "📊", l: "Tendencia (últimos 10 Gorditos)", v: `${stats.freq10} apariciones` },
