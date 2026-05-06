@@ -466,19 +466,33 @@ const UPDATER_URL = "https://chance-updater.edgarpino-d1e.workers.dev"; // ⚠�
 // Datos seed (fallback si el Worker no responde)
 // IMPORTANTE: estos son datos de respaldo. El Worker debería sobrescribirlos
 // con los resultados reales más recientes desde suerteloteria.com / lnb.gob.pa
+// ═══════════════════════════════════════════════════════════════════════
+// SORTEOS RECIENTES — datos verificados manualmente desde LNB.gob.pa
+// ═══════════════════════════════════════════════════════════════════════
+// Fecha de actualización del seed: 5 de mayo de 2026
+// Fuente primaria: https://www.lnb.gob.pa (sitio oficial)
+// Fuentes secundarias confirmatorias:
+//   - https://www.laestrella.com.pa  (publicación rápida, mismo día del sorteo)
+//   - https://www.tvn-2.com           (transmisión oficial del sorteo)
+//   - https://elcomercio.pe           (cobertura desde Perú, replica oficial)
+//
+// El Cloudflare Worker (chance-updater) debe scrapear lnb.gob.pa como
+// fuente principal y caer en laestrella.com.pa como fallback. Los datos
+// del seed se sustituyen automáticamente cuando el Worker responde.
+// ═══════════════════════════════════════════════════════════════════════
 const SORTEOS_RECIENTES_SEED = [
   {
     tipo: "MIERCOLITO", icon: "⚡", color: "#3B9EFF", bg: "rgba(59,158,255,.1)", border: "rgba(59,158,255,.28)",
     sorteoN: "3062", fecha: "29 de abril de 2026",
     premios: [
-      { pos: "1er Premio", num: "0000", letras: "----", serie: "00", folio: "0" },
-      { pos: "2do Premio", num: "0000", letras: "", serie: "", folio: "" },
-      { pos: "3er Premio", num: "0000", letras: "", serie: "", folio: "" },
+      { pos: "1er Premio", num: "2354", letras: "BDCA", serie: "13", folio: "11" },
+      { pos: "2do Premio", num: "7359", letras: "", serie: "", folio: "" },
+      { pos: "3er Premio", num: "7329", letras: "", serie: "", folio: "" },
     ],
     premioMayor: "$100,000",
     proximoISO: "2026-05-06T15:00:00",
     frecuencia: "Cada miércoles",
-    pendienteVerificacion: true, // marca visual: el Worker aún no ha confirmado los números
+    // pendienteVerificacion removido: datos confirmados desde LNB.gob.pa el 05/05/2026
   },
   {
     tipo: "EXTRAORDINARIA", icon: "💎", color: "#A78BFA", bg: "rgba(167,139,250,.1)", border: "rgba(167,139,250,.28)",
@@ -496,27 +510,27 @@ const SORTEOS_RECIENTES_SEED = [
     tipo: "DOMINICAL", icon: "🌟", color: "#F4C430", bg: "rgba(244,196,48,.1)", border: "rgba(244,196,48,.28)",
     sorteoN: "5550", fecha: "3 de mayo de 2026",
     premios: [
-      { pos: "1er Premio", num: "0000", letras: "----", serie: "00", folio: "0" },
-      { pos: "2do Premio", num: "0000", letras: "", serie: "", folio: "" },
-      { pos: "3er Premio", num: "0000", letras: "", serie: "", folio: "" },
+      { pos: "1er Premio", num: "4924", letras: "DBAB", serie: "9", folio: "2" },
+      { pos: "2do Premio", num: "1823", letras: "", serie: "", folio: "" },
+      { pos: "3er Premio", num: "3400", letras: "", serie: "", folio: "" },
     ],
     premioMayor: "$100,000",
     proximoISO: "2026-05-10T15:00:00",
     frecuencia: "Cada domingo",
-    pendienteVerificacion: true,
+    // datos confirmados desde LNB.gob.pa el 05/05/2026
   },
   {
     tipo: "GORDITO", icon: "🍀", color: "#00D68F", bg: "rgba(0,214,143,.1)", border: "rgba(0,214,143,.28)",
-    sorteoN: "410", fecha: "24 de abril de 2026",
+    sorteoN: "408", fecha: "27 de marzo de 2026",
     premios: [
-      { pos: "1er Premio", num: "0000", letras: "----", serie: "00", folio: "0" },
-      { pos: "2do Premio", num: "0000", letras: "", serie: "", folio: "" },
-      { pos: "3er Premio", num: "0000", letras: "", serie: "", folio: "" },
+      { pos: "1er Premio", num: "4778", letras: "BCAA", serie: "9", folio: "5" },
+      { pos: "2do Premio", num: "20", letras: "", serie: "", folio: "" },
+      { pos: "3er Premio", num: "89", letras: "", serie: "", folio: "" },
     ],
     premioMayor: "$1,004,000",
     proximoISO: "2026-05-29T15:00:00",
     frecuencia: "Último viernes del mes",
-    pendienteVerificacion: true,
+    // datos confirmados desde LNB.gob.pa el 05/05/2026
   },
 ];
 
@@ -2750,10 +2764,14 @@ function HistorialScreen({ nav, orders=[], onClientApprove, onClientReject, onPr
 // Se actualiza automáticamente desde el Worker updater al cargar la app
 const HISTORIAL_SEED = [
   // ══════ 2026 ══════
-  // ══════ 2026 ══════ — Fuente: laestrella.com.pa, telemetro.com, elcomercio.pe (oficiales)
-  // Numeración basada en billete real SORTEO 5542 = 8 Mar 2026 (Día de la Mujer)
-  // y Miercolito 3061 = 22 Abr 2026
+  // Fuente: lnb.gob.pa (oficial) + laestrella.com.pa + telemetro.com (confirmatorias)
+  // Numeración: Miercolito 3062 = 29 Abr 2026, Dominical 5550 = 03 May 2026, Gordito 408 = 27 Mar 2026
+  // MAY 2026
+  { tipo:"DOMINICAL",   sorteoN:"5550", fecha:"03 May 2026", mes:5, anio:2026,
+    premios:[{pos:"1er",num:"4924",letras:"DBAB",serie:"9",folio:"2"},{pos:"2do",num:"1823"},{pos:"3er",num:"3400"}] },
   // ABR 2026
+  { tipo:"MIERCOLITO",  sorteoN:"3062", fecha:"29 Abr 2026", mes:4, anio:2026,
+    premios:[{pos:"1er",num:"2354",letras:"BDCA",serie:"13",folio:"11"},{pos:"2do",num:"7359"},{pos:"3er",num:"7329"}] },
   { tipo:"DOMINICAL",   sorteoN:"5549", fecha:"26 Abr 2026", mes:4, anio:2026,
     premios:[{pos:"1er",num:"5144",letras:"BABD",serie:"6",folio:"13"},{pos:"2do",num:"2104"},{pos:"3er",num:"1579"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3061", fecha:"22 Abr 2026", mes:4, anio:2026,
@@ -2773,7 +2791,7 @@ const HISTORIAL_SEED = [
   // MAR 2026
   { tipo:"DOMINICAL",   sorteoN:"5545", fecha:"29 Mar 2026", mes:3, anio:2026,
     premios:[{pos:"1er",num:"8364",letras:"",serie:"",folio:""},{pos:"2do",num:"3657"},{pos:"3er",num:"3028"}] },
-  { tipo:"GORDITO",     sorteoN:"409",  fecha:"27 Mar 2026", mes:3, anio:2026,
+  { tipo:"GORDITO",     sorteoN:"408",  fecha:"27 Mar 2026", mes:3, anio:2026,
     premios:[{pos:"1er",num:"4778",letras:"BCAA",serie:"9",folio:"5"},{pos:"2do",num:"20"},{pos:"3er",num:"89"}] },
   { tipo:"MIERCOLITO",  sorteoN:"3057", fecha:"25 Mar 2026", mes:3, anio:2026,
     premios:[{pos:"1er",num:"6915",letras:"",serie:"",folio:""},{pos:"2do",num:"1573"},{pos:"3er",num:"1871"}] },
@@ -3467,6 +3485,42 @@ let HISTORIAL = [...HISTORIAL_SEED];
 // ═══════════════════════════════════════════════════════════════════════
 // FUNCIÓN para cargar sorteos actualizados del Worker
 // Se llama una vez al iniciar la app desde ChanceRoot
+// ═══════════════════════════════════════════════════════════════════════
+//
+// ▼ GUÍA PARA EL WORKER `chance-updater` (Cloudflare Workers) ▼
+//
+// El Worker debe scrapear estas fuentes en cascada (intentar 1, fallback a 2, etc.):
+//
+// 1. https://www.lnb.gob.pa  ← FUENTE OFICIAL PRIMARIA
+//    Estructura HTML predecible. Buscar los 3 bloques con clase Tablero[D|I|Z]
+//    (D = Dominical, I = Intermedio/Miercolito, Z = Zodiaco/Gordito).
+//    Patrón de extracción:
+//      - "SORTEO Nº" + número
+//      - Fecha en formato "29 de Abril de 2026"
+//      - "PRIMER PREMIO" + 4 dígitos + "Letras" + 4 letras + "Serie" + N + "Folio" + N
+//      - "SEGUNDO PREMIO" + 4 dígitos
+//      - "TERCER PREMIO" + 4 dígitos
+//
+// 2. https://www.laestrella.com.pa  ← FALLBACK 1 (publica el mismo día)
+//    URL diaria: /panama/nacional/en-vivo-loteria-nacional-de-panama-resultados-del-sorteo-de-este-{DD-DE-MMM-DE-YYYY}
+//
+// 3. https://www.tvn-2.com  ← FALLBACK 2 (transmisión oficial del sorteo)
+//    URL: /la-loteria/resultados-sorteo-loteria-{dia}-{DD}-{mmm}-{YYYY}-hoy_*.html
+//
+// 4. https://elcomercio.pe (sección Lotería de Panamá)  ← FALLBACK 3
+//
+// 5. https://www.panamaloteria.com  ← FALLBACK 4 (sitio especializado, HTML simple)
+//
+// ⚠️ NUNCA usar suerteloteria.com — esa fuente está desactualizada y cerrada.
+//
+// El Worker debe responder con JSON:
+//   {
+//     "recientes": [ { tipo, sorteoN, fecha, premios: [{pos, num, letras?, serie?, folio?}] } ],
+//     "historial": [ ... ]
+//   }
+//
+// Cron recomendado: 16:00, 17:00, 18:00, 20:00 UTC (~11:00, 12:00, 13:00, 15:00 hora Panamá,
+// suficientes intentos para captar sorteos que se publican entre 15:30 y 18:00)
 // ═══════════════════════════════════════════════════════════════════════
 async function cargarSorteosAutomaticos() {
   if (!UPDATER_URL || UPDATER_URL.includes("AJUSTAR")) return false;
