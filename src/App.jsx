@@ -413,14 +413,27 @@ function RepartidorMapa({ orders = [], repartidorId = "repartidor_juan" }) {
       label: 'Tú estás aquí', popup: `<b>🛵 Tu ubicación</b><br/>Velocidad: ${ubicMia.velocidad || 0} km/h`
     });
   }
-  // Cada entrega activa (usar coordenadas si las tiene, sino default Panamá)
+  // Para CADA entrega activa, mostrar el lugar correcto según fase:
+  //   - APROBADO (pickup): mostrar ubicación EXACTA del vendedor (donde recoger)
+  //   - EN_CAMINO (dropoff): mostrar ubicación EXACTA del cliente (donde entregar)
   orders.forEach((o, i) => {
-    const lat = o.deliveryAddress?.lat || o.coordinates?.lat || (8.9824 + (i * 0.005));
-    const lng = o.deliveryAddress?.lng || o.coordinates?.lng || (-79.5199 + (i * 0.005));
-    markers.push({
-      type: 'casa', lat, lng,
-      label: o.id, popup: `<b>📦 ${o.id}</b><br/>${o.deliveryAddress?.text || 'Cliente'}<br/><b>$${o.lotteryValue || '0'}</b>`
-    });
+    if (o.status === "APROBADO") {
+      // FASE PICKUP: pin en el vendedor (el repartidor va a recoger)
+      const v = getVendorCoords(o.vendorId || "V001");
+      markers.push({
+        type: 'vendedor', lat: v.lat, lng: v.lng,
+        label: o.id,
+        popup: `<b>🏪 ${v.name}</b><br/>${v.address}<br/><b>Pedido ${o.id}</b>`
+      });
+    } else {
+      // FASE DROPOFF u otros estados: pin en el cliente
+      const lat = o.deliveryAddress?.lat || o.coordinates?.lat || (8.9824 + (i * 0.005));
+      const lng = o.deliveryAddress?.lng || o.coordinates?.lng || (-79.5199 + (i * 0.005));
+      markers.push({
+        type: 'casa', lat, lng,
+        label: o.id, popup: `<b>📦 ${o.id}</b><br/>${o.deliveryAddress?.text || 'Cliente'}<br/><b>$${o.lotteryValue || '0'}</b>`
+      });
+    }
   });
 
   return (
@@ -1464,7 +1477,7 @@ function BuscarScreen({ nav, sharedVendor }) {
                         const isAvail = i >= r.item.sold;
                         return (
                           <div key={i} className="frac-cell" style={{background:isAvail?"rgba(244,196,48,.1)":"rgba(110,133,158,.05)",border:`1.5px solid ${isAvail?"rgba(244,196,48,.35)":"rgba(110,133,158,.12)"}`,opacity:isAvail?1:.4}}>
-                            <div style={{fontSize:11,fontWeight:800,color:isAvail?"var(--text)":"var(--muted)"}}>{i+1}/4</div>
+                            <div style={{fontSize:11,fontWeight:800,color:isAvail?"var(--text)":"var(--muted)"}}>{i+1}/{r.item.stock}</div>
                             <div style={{fontSize:8,color:isAvail?"var(--green)":"var(--red)",fontWeight:800,marginTop:1}}>{isAvail?"Disp":"Agot"}</div>
                             {isAvail&&<div style={{fontSize:8,color:"var(--gold)",fontWeight:700}}>$1.00</div>}
                           </div>
@@ -1711,7 +1724,7 @@ function TableroScreen({ vendor, cart, setCart, nav }) {
                 {!sold?(
                   <>
                     <div style={{fontSize:8,color:"var(--muted)",marginTop:2,fontWeight:700}}>
-                      {isChanceTab?`${avail} und`:`${avail}/4 fr`}
+                      {isChanceTab?`${avail} und`:`${avail}/${item.stock} fr`}
                     </div>
                     <div style={{fontSize:9,fontWeight:800,color:isChanceTab?"var(--blue)":"var(--gold)",marginTop:1}}>
                       {isChanceTab?"$0.25":"$1.00"}
@@ -1768,7 +1781,7 @@ function TableroScreen({ vendor, cart, setCart, nav }) {
                     const av=i>=selected.item.sold;
                     return (
                       <div key={i} className="frac-cell" style={{background:av?"rgba(244,196,48,.1)":"rgba(110,133,158,.06)",border:`1.5px solid ${av?"rgba(244,196,48,.32)":"rgba(110,133,158,.12)"}`,opacity:av?1:.4}}>
-                        <div style={{fontSize:11,fontWeight:800,color:av?"var(--text)":"var(--muted)"}}>{i+1}/4</div>
+                        <div style={{fontSize:11,fontWeight:800,color:av?"var(--text)":"var(--muted)"}}>{i+1}/{selected.item.stock}</div>
                         <div style={{fontSize:9,color:av?"var(--green)":"var(--red)",fontWeight:700,marginTop:1}}>{av?"Disp":"Agot"}</div>
                         {av&&<div style={{fontSize:8,color:"var(--gold)",fontWeight:700}}>$1.00</div>}
                       </div>
@@ -2335,8 +2348,11 @@ function TrackingScreen({ order }) {
     ? { lat: ubicVendedorFB.lat, lng: ubicVendedorFB.lng, zone: zonaAproxFromGPS, name: vendorStatic.name, address: vendorStatic.address, phone: vendorStatic.phone, fuente: "GPS" }
     : { ...vendorStatic, fuente: "static" };
 
-  // Estado: ¿ya hay un repartidor asignado y en camino?
-  const repartidorActivo = order?.status === "EN_CAMINO" || order?.status === "ENTREGADO";
+  // Estado: ¿ya hay un repartidor asignado y en camino al vendedor?
+  // pickupStarted = repartidor presionó "Iniciar recogida" → ya está en camino al vendedor
+  const repartidorAsignado = order?.pickupStarted === true; // ya tiene repartidor asignado
+  const repartidorEnCamino = order?.status === "EN_CAMINO"; // ya recogió, va al cliente
+  const repartidorActivo   = repartidorAsignado || order?.status === "EN_CAMINO" || order?.status === "ENTREGADO";
 
   // Construir markers según el estado del pedido
   // Mientras NO está EN_CAMINO: mostrar Vendedor (aproximado) + Comprador
@@ -2405,8 +2421,11 @@ function TrackingScreen({ order }) {
   const statusSteps = [
     {l:"Pedido confirmado",   key:"PENDIENTE",  ic:"check",  done:true},
     {l:"Vendedor preparando", key:"APROBADO",   ic:"pkg",    done:order&&["APROBADO","EN_CAMINO","ENTREGADO"].includes(order.status)},
-    {l:"Repartidor asignado", key:"EN_CAMINO",  ic:"truck",  done:order&&["EN_CAMINO","ENTREGADO"].includes(order.status)},
-    {l:"En camino 🛵",        key:"EN_CAMINO",  ic:"truck",  act:order?.status==="EN_CAMINO"},
+    // "Repartidor asignado" se completa cuando el repartidor presiona "Iniciar recogida"
+    // (pickupStarted=true) o cuando ya pasó a EN_CAMINO/ENTREGADO
+    {l:"Repartidor asignado", key:"ASIGNADO",   ic:"truck",  done:order&&(order.pickupStarted===true||["EN_CAMINO","ENTREGADO"].includes(order.status))},
+    // "En camino" sólo cuando ya recogió y va hacia el cliente
+    {l:"En camino 🛵",        key:"EN_CAMINO",  ic:"truck",  done:order&&["EN_CAMINO","ENTREGADO"].includes(order.status), act:order?.status==="EN_CAMINO"},
     {l:"Entregado",           key:"ENTREGADO",  ic:"check",  done:order?.status==="ENTREGADO"},
   ];
   return (
@@ -2482,15 +2501,19 @@ function TrackingScreen({ order }) {
         )}
       </div>
       )}
-      {/* Mensaje informativo cuando aún no hay repartidor asignado */}
-      {!repartidorActivo && order && (
-      <div className="card" style={{marginBottom:10, background:"rgba(244,196,48,.06)", border:"1px solid rgba(244,196,48,.2)"}}>
+      {/* Mensaje informativo: cambia según fase */}
+      {!repartidorEnCamino && order && (
+      <div className="card" style={{marginBottom:10, background: repartidorAsignado ? "rgba(59,158,255,.06)" : "rgba(244,196,48,.06)", border: `1px solid ${repartidorAsignado ? "rgba(59,158,255,.25)" : "rgba(244,196,48,.2)"}`}}>
         <div className="row" style={{gap:10,alignItems:"center"}}>
-          <div style={{fontSize:24}}>⏳</div>
+          <div style={{fontSize:24}}>{repartidorAsignado ? "🛵" : "⏳"}</div>
           <div style={{flex:1}}>
-            <div style={{fontWeight:800,fontSize:12,color:"var(--gold)"}}>Esperando asignación de repartidor</div>
+            <div style={{fontWeight:800,fontSize:12,color: repartidorAsignado ? "var(--blue)" : "var(--gold)"}}>
+              {repartidorAsignado ? "Repartidor asignado · En camino a recoger" : "Esperando asignación de repartidor"}
+            </div>
             <div style={{fontSize:10,color:"var(--muted)",marginTop:2}}>
-              {order?.status === "PENDIENTE" ? "El vendedor está revisando tu pedido…" : "El vendedor ya aprobó. Asignando repartidor…"}
+              {repartidorAsignado
+                ? "Tu repartidor va al vendedor a recoger tu pedido"
+                : (order?.status === "PENDIENTE" ? "El vendedor está revisando tu pedido…" : "El vendedor ya aprobó. Asignando repartidor…")}
             </div>
           </div>
         </div>
@@ -7183,8 +7206,8 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
                     );
                   })}
                   <div style={{borderTop:"1px solid rgba(255,255,255,.06)",marginTop:8,paddingTop:6,display:"flex",justifyContent:"space-between"}}>
-                    <span style={{fontSize:10,color:"var(--muted)"}}>Lotería + Delivery $2.50 + Fee $1.00</span>
-                    <span style={{fontSize:12,fontWeight:800,color:"var(--gold)"}}>${(parseFloat(o.lotteryValue||0)+3.50).toFixed(2)}</span>
+                    <span style={{fontSize:10,color:"var(--muted)"}}>Lotería + Delivery ${parseFloat(o.deliveryFee||"2.50").toFixed(2)} + Fee $1.00</span>
+                    <span style={{fontSize:12,fontWeight:800,color:"var(--gold)"}}>${(parseFloat(o.lotteryValue||0)+parseFloat(o.deliveryFee||"2.50")+1.00).toFixed(2)}</span>
                   </div>
                 </div>
 
@@ -9217,9 +9240,9 @@ function App({ forceRole=null, authUser=null, onLogout=null,
     notifySound("cancel");
     vendorRejectReplacement(orderId);
   };
-  const placeOrderWithSound = (items, method, addr) => {
+  const placeOrderWithSound = (items, method, addr, deliveryMeta) => {
     notifySound("new_order");
-    return placeOrder(items, method, addr);
+    return placeOrder(items, method, addr, deliveryMeta);
   };
 
   const nav = target => {
