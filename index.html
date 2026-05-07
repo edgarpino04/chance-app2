@@ -3,15 +3,35 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <meta name="theme-color" content="#08101E" />
     <meta name="description" content="CHANCE — El Billetero de Todos · Lotería Nacional de Panamá" />
+
+    <!-- ═══ ÍCONOS PWA ═══════════════════════════════════════════════════ -->
+    <!-- Manifest (PWA) -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Favicon (tab del navegador) -->
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="shortcut icon" href="/favicon.png" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+
+    <!-- Apple iOS — al instalar como PWA en iPhone/iPad -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+
+    <!-- ═══ COLORES & COMPORTAMIENTO PWA ═════════════════════════════════ -->
+    <!-- Color de la barra del sistema en Android (cuando PWA está abierta) -->
+    <meta name="theme-color" content="#08101E" />
+
+    <!-- Comportamiento PWA (Android + iOS) -->
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="CHANCE" />
-    <link rel="icon" type="image/png" href="/icono-192.png" />
-    <link rel="apple-touch-icon" href="/icono-192.png" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Edge / Chrome desktop -->
+    <meta name="application-name" content="CHANCE" />
+    <meta name="msapplication-TileColor" content="#08101E" />
+
     <title>CHANCE — El Billetero de Todos</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
