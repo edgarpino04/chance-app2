@@ -47,6 +47,17 @@ const fbUpdate = async (path, data) => {
   } catch (e) { return false; }
 };
 
+/**
+ * Quita las fotos en base64 antes de subir usuarios a Firebase.
+ * Las fotos pueden ser ~300KB cada una y hacen el payload demasiado grande
+ * para Firebase Realtime DB (timeout o límite). Solo viven en storage local.
+ */
+const stripUserPhotos = (users) => (users || []).map(u => {
+  if (!u || typeof u !== "object") return u;
+  const { photoIdData, photoBillData, photoLicData, ...rest } = u;
+  return rest;
+});
+
 // ─── Listener en tiempo real (polling cada 3 segundos para piloto) ───
 // Para producción se puede migrar a EventSource (SSE)
 const fbListen = (path, callback, intervalMs = 3000) => {
@@ -1177,7 +1188,7 @@ function SorteoCountdown({ isoDateStr, color, border }) {
 /* ═══════════════════════════════════════════════════════
    PANTALLA: INICIO  (Comprador)
 ═══════════════════════════════════════════════════════ */
-function ClienteHome({ cart, nav, sharedVendor, activeOrders=[] }) {
+function ClienteHome({ cart, nav, sharedVendor, activeOrders=[], activeVendors=VENDORS }) {
   const countdown = useCountdown("2026-04-08T15:00:00");
   const [sorteoTab, setSorteoTab] = useState("MIERCOLITO");
   const [, forceRefresh] = useState(0);
@@ -1356,10 +1367,11 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[] }) {
         <div className="sec" style={{marginBottom:0}}>Vendedores Cercanos</div>
         <button onClick={()=>nav("explorar")} style={{fontSize:11,color:"var(--gold)",fontWeight:700,background:"none",border:"none",cursor:"pointer"}}>Ver todos →</button>
       </div>
-      {VENDORS.map(v=>{
-        // Para Carlos Medina (V001), usar sharedVendor que tiene los datos
+      {activeVendors.map(v=>{
+        // Para Carlos Medina (V001 demo o real), usar sharedVendor que tiene los datos
         // sincronizados (sorteo activo, billetes, chances actualizados).
-        const vendorData = (v.id === 1 && sharedVendor) ? { ...v, ...sharedVendor } : v;
+        const isCarlosMedina = v.id === 1 || v.id === "V001";
+        const vendorData = (isCarlosMedina && sharedVendor) ? { ...v, ...sharedVendor } : v;
         return (
         <div key={v.id} className="card" style={{cursor:"pointer"}} onClick={()=>nav({screen:"tablero",vendor:vendorData})}>
           <div className="row" style={{justifyContent:"space-between",marginBottom:7}}>
@@ -1388,19 +1400,19 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[] }) {
 /* ═══════════════════════════════════════════════════════
    PANTALLA: BUSCAR NÚMERO  ★ nueva funcionalidad
 ═══════════════════════════════════════════════════════ */
-function BuscarScreen({ nav, sharedVendor }) {
+function BuscarScreen({ nav, sharedVendor, activeVendors=VENDORS }) {
   const [q, setQ] = useState("");
   const [tipo, setTipo] = useState("ambos"); // billete | chance | ambos
 
-  // Buscar en inventario de vendedores
-  const results = q.length >= 2 ? VENDORS.flatMap(v => {
+  // Buscar en inventario de vendedores (activos)
+  const results = q.length >= 2 ? activeVendors.flatMap(v => {
     const hits = [];
     if (tipo !== "chance") {
-      const b = v.billetes.find(b => b.n === q.padStart(4,"0") || b.n.includes(q));
+      const b = (v.billetes||[]).find(b => b.n === q.padStart(4,"0") || b.n.includes(q));
       if (b) hits.push({ vendor: v, type: "billete", item: b });
     }
     if (tipo !== "billete") {
-      const c = v.chances.find(c => c.n === q.padStart(2,"0") || c.n.includes(q));
+      const c = (v.chances||[]).find(c => c.n === q.padStart(2,"0") || c.n.includes(q));
       if (c) hits.push({ vendor: v, type: "chance", item: c });
     }
     return hits;
@@ -1459,8 +1471,9 @@ function BuscarScreen({ nav, sharedVendor }) {
             return (
               <div key={i} className="card" style={{cursor:"pointer",marginBottom:10,border:`1px solid ${isChance?"rgba(59,158,255,.25)":"rgba(244,196,48,.25)"}`}}
                 onClick={()=>{
-                  // Si el resultado es de Carlos Medina (V001), usar sharedVendor con datos sincronizados
-                  const v = (r.vendor.id === 1 && sharedVendor) ? { ...r.vendor, ...sharedVendor } : r.vendor;
+                  // Si el resultado es de Carlos Medina (V001 demo o real), usar sharedVendor con datos sincronizados
+                  const isCarlosMedina = r.vendor.id === 1 || r.vendor.id === "V001";
+                  const v = (isCarlosMedina && sharedVendor) ? { ...r.vendor, ...sharedVendor } : r.vendor;
                   nav({screen:"tablero",vendor:v});
                 }}>
                 {/* Cabecera vendedor */}
@@ -1539,18 +1552,20 @@ function BuscarScreen({ nav, sharedVendor }) {
 /* ═══════════════════════════════════════════════════════
    PANTALLA: EXPLORAR — con buscador y filtro sorteo
 ═══════════════════════════════════════════════════════ */
-function ExplorarScreen({ nav, sharedVendor }) {
+function ExplorarScreen({ nav, sharedVendor, activeVendors=VENDORS }) {
   const [q, setQ] = useState("");
   const [sorteoF, setSorteoF] = useState("todos");
 
   // sorteos únicos de los vendedores
-  const allSorteos = [...new Set(VENDORS.map(v => v.sorteoData?.tipo || v.sorteo))];
+  const allSorteos = [...new Set(activeVendors.map(v => v.sorteoData?.tipo || v.sorteo))];
 
-  const filtered = VENDORS.filter(v => {
+  const filtered = activeVendors.filter(v => {
+    // El código del vendedor puede ser numérico (1, 2 demo) o string (V003, V004 reales)
+    const codigo = typeof v.id === "string" ? v.id : `V${String(v.id).padStart(3,"0")}`;
     const matchQ = !q.trim() ||
       v.name.toLowerCase().includes(q.toLowerCase()) ||
-      `V${String(v.id).padStart(3,"0")}`.includes(q.toUpperCase()) ||
-      v.zone.toLowerCase().includes(q.toLowerCase());
+      codigo.toUpperCase().includes(q.toUpperCase()) ||
+      (v.zone || "").toLowerCase().includes(q.toLowerCase());
     const matchS = sorteoF === "todos" || v.sorteo === sorteoF;
     return matchQ && matchS;
   });
@@ -1593,8 +1608,9 @@ function ExplorarScreen({ nav, sharedVendor }) {
           <div style={{fontSize:11,color:"var(--muted)"}}>Intenta con otro nombre, código o sorteo</div>
         </div>
       ) : filtered.map(vRaw=>{
-        // Para Carlos Medina (V001), reemplazar con sharedVendor sincronizado
-        const v = (vRaw.id === 1 && sharedVendor) ? { ...vRaw, ...sharedVendor } : vRaw;
+        // Para Carlos Medina (V001 demo o real), reemplazar con sharedVendor sincronizado
+        const isCarlosMedina = vRaw.id === 1 || vRaw.id === "V001";
+        const v = (isCarlosMedina && sharedVendor) ? { ...vRaw, ...sharedVendor } : vRaw;
         return (
         <div key={v.id} className="card" style={{cursor:"pointer"}} onClick={()=>nav({screen:"tablero",vendor:v})}>
           <div className="row" style={{gap:10,marginBottom:10}}>
@@ -1656,7 +1672,21 @@ function TableroScreen({ vendor, cart, setCart, nav }) {
     setCart(prev=>{
       const ex=prev.find(i=>i.id===id);
       if(ex) return prev.map(i=>i.id===id?{...i,qty:Math.min(i.qty+qty,getAvail(item))}:i);
-      return [...prev,{id,vendorId:vendor.id,vendor:vendor.name,type,num:item.n,qty,price,sorteo:vendor.sorteo,maxQty:getAvail(item)}];
+      return [...prev,{
+        id,
+        vendorId:vendor.id,
+        vendor:vendor.name,
+        // userId del vendedor: para vendedores reales viene en vendor.userId,
+        // para demos hardcoded inferimos del v.id (V001=Carlos, V002=Rosa).
+        vendorUserId: vendor.userId
+          || (vendor.id === 1 || vendor.id === "V001" ? "vendedor_carlos"
+            : vendor.id === 2 || vendor.id === "V002" ? "vendedor_rosa"
+            : "vendedor_carlos"),
+        // Zona/lugar real del vendedor para mostrar al comprador en el mapa
+        vendorZone: vendor.zone || "",
+        type, num:item.n, qty, price,
+        sorteo:vendor.sorteo, maxQty:getAvail(item),
+      }];
     });
     setSelected(null);
   };
@@ -2371,7 +2401,10 @@ function TrackingScreen({ order }) {
     : { lat: 8.9824, lng: -79.5199 };
 
   // ─── Coordenadas del vendedor (ubicación REAL desde Firebase, aproximada por privacidad) ───
-  // Prioridad: 1) GPS en vivo del vendedor desde Firebase, 2) coords estáticas del lookup
+  // Prioridad de fuentes:
+  //   1. GPS en vivo del vendedor desde Firebase (más reciente)
+  //   2. Coords guardadas con el pedido (vendorLat/vendorLng al momento de crear)
+  //   3. Coords estáticas del lookup (solo demos legacy V001/V002)
   const vendedorIdReal = order?.vendorUserId || "vendedor_carlos";
   const ubicVendedorFB = useUbicacionUsuario(vendedorIdReal);
   const vendorStatic = getVendorCoords(order?.vendorId || "V001");
@@ -2381,9 +2414,17 @@ function TrackingScreen({ order }) {
   // El profile.lugarVende generalmente refleja "Calle X, Corregimiento" donde realmente está.
   const zonaAproxFromGPS = order?.vendorZone || order?.vendorLugar || vendorStatic.zone;
 
-  const vendorCoords = ubicVendedorFB && ubicVendedorFB.lat && ubicVendedorFB.lng
-    ? { lat: ubicVendedorFB.lat, lng: ubicVendedorFB.lng, zone: zonaAproxFromGPS, name: vendorStatic.name, address: vendorStatic.address, phone: vendorStatic.phone, fuente: "GPS" }
-    : { ...vendorStatic, fuente: "static" };
+  let vendorCoords;
+  if (ubicVendedorFB && ubicVendedorFB.lat && ubicVendedorFB.lng) {
+    // Prioridad 1: GPS en vivo (vendedor activo ahora)
+    vendorCoords = { lat: ubicVendedorFB.lat, lng: ubicVendedorFB.lng, zone: zonaAproxFromGPS, name: vendorStatic.name, address: vendorStatic.address, phone: vendorStatic.phone, fuente: "GPS" };
+  } else if (order?.vendorLat && order?.vendorLng) {
+    // Prioridad 2: coords guardadas con el pedido (al momento de crearlo)
+    vendorCoords = { lat: order.vendorLat, lng: order.vendorLng, zone: zonaAproxFromGPS, name: vendorStatic.name, address: vendorStatic.address, phone: vendorStatic.phone, fuente: "order" };
+  } else {
+    // Prioridad 3: lookup estático (demos legacy)
+    vendorCoords = { ...vendorStatic, fuente: "static" };
+  }
 
   // Estado: ¿ya hay un repartidor asignado y en camino al vendedor?
   // pickupStarted = repartidor presionó "Iniciar recogida" → ya está en camino al vendedor
@@ -6578,7 +6619,7 @@ function SuerteScreen() {
 }
 
 
-function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDORS[0].chances, setChances, orders=[], onApprove, onModify, onApproveReplacement, onRejectReplacement, onCancelByVendor, activeSorteo: propActiveSorteo, setActiveSorteo: propSetActiveSorteo, initTab="tablero", showOnlyTab=null }) {
+function VendedorHome({ authUser=null, billetes=[], setBilletes, chances=[], setChances, orders=[], onApprove, onModify, onApproveReplacement, onRejectReplacement, onCancelByVendor, activeSorteo: propActiveSorteo, setActiveSorteo: propSetActiveSorteo, initTab="tablero", showOnlyTab=null }) {
   const [mainTab, setMainTab] = useState(initTab);
   const [prodTab, setProdTab] = useState("billetes");
   const [showAdd, setShowAdd] = useState(false);
@@ -6590,6 +6631,15 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
   const [editingOrder, setEditingOrder] = useState(null);  // orderId siendo editado
   const [editedItems,  setEditedItems]  = useState([]);    // items editados
 
+  // ── IDENTIDAD DEL VENDEDOR ─────────────────────────────────────────────
+  // Cada vendedor tiene su propia identidad basada en su cuenta. Si no
+  // hay authUser (modo demo), usamos Carlos Medina V001 como fallback.
+  const vendorCode    = authUser?.numeroBilletero || "V001";
+  const vendorName    = authUser?.nombre          || "Carlos Medina";
+  const vendorUserId  = authUser?.id              || "vendedor_carlos";
+  const vendorAddress = authUser?.lugarVende      || "Calle 50, San Francisco";
+  const vendorPhone   = authUser?.telefono        || "6111-2233";
+
   // ── SORTEO ACTIVO DEL VENDEDOR ────────────────────────────────────────────
   // (Se declara temprano porque handleAdd y los filtros del tablero lo necesitan)
   const SORTEOS_VENDEDOR = SORTEOS_RECIENTES.filter(s=>["MIERCOLITO","DOMINICAL","GORDITO","EXTRAORDINARIA"].includes(s.tipo));
@@ -6598,9 +6648,32 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
   const setActiveSorteo = propSetActiveSorteo || setLocalSorteo;
 
   // ─── TRACKING GPS DEL VENDEDOR ───
-  // El vendedor envía su ubicación a Firebase mientras está activo
-  // Se usa para que el repartidor sepa dónde recoger los billetes
-  useTrackingUbicacion("vendedor_carlos", true);
+  // El vendedor envía su ubicación a Firebase mientras está activo.
+  // Se usa para que el comprador y el repartidor sepan dónde está exactamente
+  // (no la zona estática hardcoded). Si el navegador no tiene permiso GPS,
+  // el comprador verá las coords aproximadas del corregimiento del perfil.
+  useTrackingUbicacion(vendorUserId, true);
+
+  // Estado del GPS del vendedor — para mostrar un banner si NO se ha podido
+  // capturar la ubicación. Sin GPS, el comprador ve un punto incorrecto.
+  const [gpsVendedor, setGpsVendedor] = useState({ status: "checking", error: null });
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setGpsVendedor({ status: "unsupported", error: "GPS no disponible en este dispositivo" });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      () => setGpsVendedor({ status: "ok", error: null }),
+      (err) => {
+        const msg = err.code === 1 ? "Permiso denegado — habilita ubicación en el navegador"
+                   : err.code === 2 ? "Señal GPS no disponible"
+                   : err.code === 3 ? "Tiempo de espera excedido"
+                   : "Error desconocido de GPS";
+        setGpsVendedor({ status: "error", error: msg });
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }, []);
 
   // CORRECCIÓN: useEffect (no useState) para sincronizar tab con nav inferior
   useEffect(() => { setMainTab(initTab); }, [initTab]);
@@ -6610,27 +6683,37 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
     const n = newNum.trim().padStart(addType==="billete"?4:2,"0");
     // Asociamos cada billete/chance al sorteo activo del vendedor para que
     // el comprador SOLO vea los billetes correspondientes al sorteo seleccionado.
-    const sorteoMeta = {
-      sorteoTipo: activeSorteo?.tipo || "MIERCOLITO",
-      sorteoN:    activeSorteo?.sorteoN || "",
+    // También etiquetamos con vendorOwnerId para que cada vendedor vea SOLO
+    // sus propios items (Israel ≠ Carlos, aunque compartan la lista global).
+    const itemMeta = {
+      sorteoTipo:    activeSorteo?.tipo || "MIERCOLITO",
+      sorteoN:       activeSorteo?.sorteoN || "",
+      vendorOwnerId: vendorUserId,
+      vendorCode:    vendorCode,
     };
     if (addType==="billete") {
-      // Permitir mismo número en sorteos diferentes (Miércoles 0099 ≠ Domingo 0099)
-      const yaExiste = billetes.find(b=>b.n===n && b.sorteoTipo===sorteoMeta.sorteoTipo);
-      if (!yaExiste) setBilletes&&setBilletes(p=>[...p,{n,stock:newStock,sold:0,...sorteoMeta}]);
+      // Mismo número en sorteos/vendedores diferentes es OK
+      const yaExiste = billetes.find(b => b.n===n
+        && b.sorteoTipo===itemMeta.sorteoTipo
+        && (b.vendorOwnerId||"vendedor_carlos")===vendorUserId);
+      if (!yaExiste) setBilletes&&setBilletes(p=>[...p,{n,stock:newStock,sold:0,...itemMeta}]);
     } else {
-      const yaExiste = chances.find(c=>c.n===n && c.sorteoTipo===sorteoMeta.sorteoTipo);
-      if (!yaExiste) setChances&&setChances(p=>[...p,{n,stock:newStock,sold:0,...sorteoMeta}]);
+      const yaExiste = chances.find(c => c.n===n
+        && c.sorteoTipo===itemMeta.sorteoTipo
+        && (c.vendorOwnerId||"vendedor_carlos")===vendorUserId);
+      if (!yaExiste) setChances&&setChances(p=>[...p,{n,stock:newStock,sold:0,...itemMeta}]);
     }
     setNewNum(""); setNewStock(1);
     setAddSuccess(true); setTimeout(()=>{setAddSuccess(false);setShowAdd(false);},1600);
   };
 
-  // ─── Filtrar billetes/chances por sorteo activo ───
-  // Backward-compat: items sin sorteoTipo se consideran del sorteo activo (legacy seed).
+  // ─── Filtrar billetes/chances por sorteo activo + dueño ───
+  // Cada vendedor solo ve los items que le pertenecen (etiquetados con
+  // vendorOwnerId). Backward-compat: items sin tag se asumen como Carlos.
   const sorteoActivoTipo = activeSorteo?.tipo || "MIERCOLITO";
-  const billetesDelSorteo = (billetes||[]).filter(b => !b.sorteoTipo || b.sorteoTipo === sorteoActivoTipo);
-  const chancesDelSorteo  = (chances ||[]).filter(c => !c.sorteoTipo || c.sorteoTipo === sorteoActivoTipo);
+  const esMio = item => (item.vendorOwnerId || "vendedor_carlos") === vendorUserId;
+  const billetesDelSorteo = (billetes||[]).filter(b => esMio(b) && (!b.sorteoTipo || b.sorteoTipo === sorteoActivoTipo));
+  const chancesDelSorteo  = (chances ||[]).filter(c => esMio(c) && (!c.sorteoTipo || c.sorteoTipo === sorteoActivoTipo));
 
   // ── EDICIÓN INLINE DE ITEMS DEL TABLERO ───────────────────────────────────
   // Cuando el vendedor toca un billete/chance, se abre un panel para
@@ -6649,7 +6732,9 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
     if (!selectedItem) return;
     const { n, isChance: ic, sorteoTipo: st } = selectedItem;
     const updater = arr => arr.map(item => {
-      const matches = item.n === n && (!item.sorteoTipo || item.sorteoTipo === st);
+      // Solo modificar mi item (mi vendorOwnerId, mi sorteo, mismo número)
+      const isMine    = (item.vendorOwnerId || "vendedor_carlos") === vendorUserId;
+      const matches   = isMine && item.n === n && (!item.sorteoTipo || item.sorteoTipo === st);
       if (!matches) return item;
       const newStock = Math.max(item.sold, item.stock + delta); // no menor a lo ya vendido
       return { ...item, stock: newStock };
@@ -6664,8 +6749,9 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
     if (!selectedItem) return;
     const { n, isChance: ic, sorteoTipo: st } = selectedItem;
     const filtrar = arr => arr.filter(item => {
-      const matches = item.n === n && (!item.sorteoTipo || item.sorteoTipo === st);
-      if (!matches) return true;            // mantener
+      const isMine    = (item.vendorOwnerId || "vendedor_carlos") === vendorUserId;
+      const matches   = isMine && item.n === n && (!item.sorteoTipo || item.sorteoTipo === st);
+      if (!matches) return true;            // mantener (no es mío o no es este)
       if (item.sold > 0) return true;        // no eliminar si ya hay ventas
       return false;                           // eliminar
     });
@@ -6699,14 +6785,18 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
     const bId = parseInt((b.id||'').replace(/\D/g,''))||0;
     return bId - aId;
   };
-  const pendingOrders     = orders.filter(o=>o.status==="PENDIENTE").sort(sortNew);
-  const replacementOrders = orders.filter(o=>o.status==="REEMPLAZO").sort(sortNew);
-  const approvedOrders    = orders.filter(o=>o.status==="APROBADO").sort(sortNew);
-  const allVOrders        = orders.filter(o=>["PENDIENTE","REEMPLAZO","MODIFICADO","APROBADO","EN_CAMINO","ENTREGADO","CANCELADO"].includes(o.status)).sort(sortNew);
+  // Filtrar solo los pedidos que le pertenecen a ESTE vendedor
+  // Backward-compat: pedidos sin vendorUserId se asumen como Carlos
+  const esMioOrder = o => (o.vendorUserId || "vendedor_carlos") === vendorUserId;
+  const myOrders          = orders.filter(esMioOrder);
+  const pendingOrders     = myOrders.filter(o=>o.status==="PENDIENTE").sort(sortNew);
+  const replacementOrders = myOrders.filter(o=>o.status==="REEMPLAZO").sort(sortNew);
+  const approvedOrders    = myOrders.filter(o=>o.status==="APROBADO").sort(sortNew);
+  const allVOrders        = myOrders.filter(o=>["PENDIENTE","REEMPLAZO","MODIFICADO","APROBADO","EN_CAMINO","ENTREGADO","CANCELADO"].includes(o.status)).sort(sortNew);
 
   // ── SISTEMA DE PLANTILLAS POR SORTEO (Persistent Storage) ────────────────
   // Clave: "plantilla_V001_MIERCOLITO" → {billetes:[...], chances:[...], savedAt:"..."}
-  const VENDOR_CODE = "V001";
+  const VENDOR_CODE = vendorCode;
   const storageKey  = tipo => `plantilla_${VENDOR_CODE}_${tipo}`;
 
   const [templates,     setTemplates]     = useState({});  // {MIERCOLITO:{billetes,chances,savedAt}, ...}
@@ -6787,10 +6877,10 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
         <div>
           <div style={{fontSize:10,color:"var(--muted)"}}>Vendedor</div>
           <div className="row" style={{gap:8,alignItems:"center",marginTop:1}}>
-            <div style={{fontFamily:"'Bebas Neue'",fontSize:24,color:"var(--gold)",letterSpacing:2,lineHeight:1}}>CARLOS MEDINA</div>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:24,color:"var(--gold)",letterSpacing:2,lineHeight:1,textTransform:"uppercase"}}>{vendorName}</div>
             <div style={{background:"rgba(244,196,48,.12)",border:"1px solid rgba(244,196,48,.3)",borderRadius:7,padding:"3px 8px",display:"flex",alignItems:"center",gap:4}}>
               <span style={{fontSize:9,color:"var(--muted)",fontWeight:700}}>CÓDIGO</span>
-              <span style={{fontFamily:"'Bebas Neue'",fontSize:15,color:"var(--gold)",letterSpacing:1.5,lineHeight:1}}>V001</span>
+              <span style={{fontFamily:"'Bebas Neue'",fontSize:15,color:"var(--gold)",letterSpacing:1.5,lineHeight:1}}>{vendorCode}</span>
             </div>
           </div>
         </div>
@@ -7055,7 +7145,7 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
           {v:String(pendingOrders.length),                                         l:"⏳ Nuevos"},
           {v:String(replacementOrders.length),                                     l:"🔄 Reemplazos"},
           {v:String(approvedOrders.length),                                        l:"✅ Aprobados"},
-          {v:String(orders.filter(o=>o.status==="ENTREGADO").length),              l:"📦 Entregados"},
+          {v:String(myOrders.filter(o=>o.status==="ENTREGADO").length),              l:"📦 Entregados"},
         ].map(s=>(
           <div key={s.l} className="stat"><div className="sval">{s.v}</div><div className="slbl">{s.l}</div></div>
         ))}
@@ -7070,6 +7160,25 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
       )}
       </>
       )}
+      {/* Banner GPS — solo si hay error o falta permiso */}
+      {(gpsVendedor.status === "error" || gpsVendedor.status === "unsupported") && (
+        <div style={{background:"rgba(255,75,110,.07)",border:"1px solid rgba(255,75,110,.3)",borderRadius:11,padding:"10px 13px",display:"flex",gap:9,marginBottom:10,alignItems:"flex-start"}}>
+          <span style={{fontSize:16}}>⚠️</span>
+          <div style={{fontSize:11,color:"var(--text)",lineHeight:1.5}}>
+            <strong style={{color:"var(--red)"}}>GPS no disponible.</strong> Sin GPS, los compradores no verán tu ubicación correcta en el mapa. {gpsVendedor.error}
+            <br/>
+            <button onClick={()=>{
+              navigator.geolocation.getCurrentPosition(
+                ()=>{setGpsVendedor({status:"ok",error:null}); toast("✅ GPS activado");},
+                (err)=>toast("❌ "+(err.code===1?"Permiso denegado":"GPS error")),
+                { enableHighAccuracy:true, timeout:10000 }
+              );
+            }} style={{marginTop:6,padding:"5px 10px",background:"rgba(255,204,51,.1)",border:"1px solid rgba(255,204,51,.4)",borderRadius:7,color:"var(--gold)",fontSize:10,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+              📍 Activar GPS
+            </button>
+          </div>
+        </div>
+      )}
       <div style={{background:"rgba(244,196,48,.06)",border:"1px solid rgba(244,196,48,.18)",borderRadius:11,padding:"8px 13px",display:"flex",gap:8,marginBottom:12,alignItems:"center"}}>
         <Ic n="info" s={14} c="var(--gold)"/>
         <span style={{fontSize:11,color:"var(--muted)"}}>
@@ -7081,7 +7190,7 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
       <div style={{background:"rgba(255,75,110,.06)",border:"1px solid rgba(255,75,110,.2)",borderRadius:11,padding:"8px 13px",display:"flex",gap:8,marginBottom:12,alignItems:"center"}}>
         <span style={{fontSize:14}}>⚠️</span>
         <span style={{fontSize:11,color:"var(--red)",fontWeight:700}}>
-          {billetes.filter(b=>b.sold>=b.stock).length} billetes y {chances.filter(c=>c.sold>=c.stock).length} chances agotados
+          {(billetes||[]).filter(b=>esMio(b) && b.sold>=b.stock).length} billetes y {(chances||[]).filter(c=>esMio(c) && c.sold>=c.stock).length} chances agotados
         </span>
       </div>
       </>
@@ -7247,15 +7356,26 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
                       </div>
                     );
                   })}
-                  <div style={{borderTop:"1px solid rgba(255,255,255,.06)",marginTop:8,paddingTop:6,display:"flex",justifyContent:"space-between"}}>
-                    <span style={{fontSize:10,color:"var(--muted)"}}>Lotería + Delivery ${parseFloat(o.deliveryFee||"2.50").toFixed(2)} + Fee $1.00</span>
-                    <span style={{fontSize:12,fontWeight:800,color:"var(--gold)"}}>${(parseFloat(o.lotteryValue||0)+parseFloat(o.deliveryFee||"2.50")+1.00).toFixed(2)}</span>
-                  </div>
                 </div>
 
-                <div style={{fontSize:10,color:"var(--muted)",marginBottom:8}}>
-                  {o.vendor} · 📍 {o.deliveryAddr}
-                  <span style={{color:"var(--green)",marginLeft:6}}>Recibe: ${totals.vendorReceives}</span>
+                {/* Lo que el vendedor recibe — destacado y grande */}
+                <div style={{
+                  background:"rgba(0,214,143,.08)",
+                  border:"1px solid rgba(0,214,143,.3)",
+                  borderRadius:11, padding:"10px 14px",
+                  display:"flex", alignItems:"center", justifyContent:"space-between",
+                  marginBottom:8
+                }}>
+                  <div>
+                    <div style={{fontSize:9, color:"var(--muted)", fontWeight:800, letterSpacing:.8, textTransform:"uppercase"}}>Recibirás</div>
+                    <div style={{fontSize:10, color:"var(--muted)", marginTop:1}}>{o.vendor} · 📍 {o.deliveryAddr}</div>
+                  </div>
+                  <div style={{
+                    fontFamily:"'Bebas Neue', sans-serif",
+                    fontSize:28, color:"var(--green)", letterSpacing:1, lineHeight:1
+                  }}>
+                    ${totals.vendorReceives}
+                  </div>
                 </div>
 
                 <div className="row" style={{gap:7,flexWrap:"wrap"}}>
@@ -7892,9 +8012,14 @@ function BatchTripCard({ batch, onAccept, onDecline, isActive }) {
 /* ═══════════════════════════════════════════════════════
    MÓDULO REPARTIDOR — con Motor de Pagos integrado
 ═══════════════════════════════════════════════════════ */
-function RepartidorHome({ orders=[], onAssign, onDeliver, onStartPickup, initTab="inicio" }) {
+function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStartPickup, initTab="inicio" }) {
   const [rTab, setRTab] = useState(initTab);
   const [batchAccepted, setBatchAccepted] = useState(false);
+
+  // ── IDENTIDAD DEL REPARTIDOR ─────────────────────────────────────────────
+  // Se deriva del authUser logueado. Fallback a Juan Rodríguez (demo).
+  const repartidorUserId = authUser?.id || "repartidor_juan";
+  const repartidorName   = authUser?.nombre || "Juan Rodríguez";
 
   // CORRECCIÓN: useEffect para sincronizar tab con nav inferior
   useEffect(() => { setRTab(initTab); }, [initTab]);
@@ -7907,9 +8032,17 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, onStartPickup, initTab
     const bId = parseInt((b.id||'').replace(/\D/g,''))||0;
     return bId - aId;
   };
-  const approvedOrders  = orders.filter(o=>o.status==="APROBADO").sort(sortNewR);
-  const inTransitOrders = orders.filter(o=>o.status==="EN_CAMINO").sort(sortNewR);
-  const deliveredOrders = orders.filter(o=>o.status==="ENTREGADO").sort(sortNewR);
+  // Cada repartidor solo ve los pedidos que le fueron asignados específicamente,
+  // los pendientes (que cualquiera puede tomar), y los suyos ya en camino/entregados.
+  // Backward-compat: pedidos sin assignedRepartidorId se asumen como Juan.
+  const esMioR = o => {
+    const asignado = o.assignedRepartidorId || (o.status === "APROBADO" || o.status === "PENDIENTE" ? null : "repartidor_juan");
+    return !asignado || asignado === repartidorUserId;
+  };
+  const myOrders        = orders.filter(esMioR);
+  const approvedOrders  = myOrders.filter(o=>o.status==="APROBADO").sort(sortNewR);
+  const inTransitOrders = myOrders.filter(o=>o.status==="EN_CAMINO").sort(sortNewR);
+  const deliveredOrders = myOrders.filter(o=>o.status==="ENTREGADO").sort(sortNewR);
   // Pedidos PENDIENTES: el repartidor los ve para saber que están en cola, pero no puede iniciarlos
   const pendingOrders   = orders.filter(o=>["PENDIENTE","MODIFICADO","REEMPLAZO"].includes(o.status)).sort(sortNewR);
 
@@ -7917,7 +8050,7 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, onStartPickup, initTab
   // Se activa automáticamente cuando el repartidor tiene al menos 1 entrega EN_CAMINO
   // Envía la ubicación a Firebase cada vez que cambia (watchPosition)
   const tieneEntregaActiva = inTransitOrders.length > 0;
-  useTrackingUbicacion("repartidor_juan", tieneEntregaActiva);
+  useTrackingUbicacion(repartidorUserId, tieneEntregaActiva);
 
   // Estado del GPS (para mostrar al repartidor)
   const [gpsStatus, setGpsStatus] = useState(null);
@@ -8102,7 +8235,7 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, onStartPickup, initTab
         </div>
         {/* Mapa real con Leaflet del repartidor */}
         {(approvedOrders.length>0 || inTransitOrders.length>0) ? (
-          <RepartidorMapa orders={[...approvedOrders, ...inTransitOrders]} repartidorId="repartidor_juan" />
+          <RepartidorMapa orders={[...approvedOrders, ...inTransitOrders]} repartidorId={repartidorUserId} />
         ) : (
           <div style={{
             height:160, borderRadius:14, background:"var(--bg2)",
@@ -8294,7 +8427,7 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, onStartPickup, initTab
                           const pos = await new Promise((resolve, reject) => {
                             navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 8000 });
                           });
-                          await fbWrite(`ubicaciones/repartidor_juan`, {
+                          await fbWrite(`ubicaciones/${repartidorUserId}`, {
                             lat: pos.coords.latitude,
                             lng: pos.coords.longitude,
                             timestamp: Date.now(),
@@ -8957,7 +9090,8 @@ function App({ forceRole=null, authUser=null, onLogout=null,
   sharedBilletes, setSharedBilletes,
   sharedChances, setSharedChances,
   sharedOrders, setSharedOrders,
-  vendorActiveSorteo, setVendorActiveSorteo }) {
+  vendorActiveSorteo, setVendorActiveSorteo,
+  activeVendors=VENDORS }) {
   const [phase,        setPhase]       = useState(forceRole?"app":"splash");
   const [role,         setRole]        = useState(forceRole);
   const [activeRole,   setActiveRole]  = useState(forceRole);
@@ -9001,13 +9135,37 @@ function App({ forceRole=null, authUser=null, onLogout=null,
   // ── HELPERS ──────────────────────────────────────────────────────────────
 
   /** Crear UN solo pedido consolidado con todos los items del carrito */
-  const placeOrder = (items, method, addr, deliveryMeta) => {
+  const placeOrder = async (items, method, addr, deliveryMeta) => {
     if (!items?.length) return null;
     const id = `CH-${2408 + sharedOrders.length}`;
     const lotteryTotal = items.reduce((s,i) => s + i.price * i.qty, 0);
     // Datos del vendedor para tracking — incluyen su corregimiento real (no la zone hardcoded)
     const vendorIdOrder = items[0].vendorId || "V001";
     const vendorStaticOrder = getVendorCoords(vendorIdOrder);
+    // El vendorUserId se toma del primer item del carrito (etiquetado al añadirlo).
+    // Fallback legacy según el código del vendedor para demos viejos.
+    const vendorUserIdOrder = items[0].vendorUserId
+      || (vendorIdOrder === "V001" ? "vendedor_carlos"
+        : vendorIdOrder === "V002" ? "vendedor_rosa"
+        : "vendedor_carlos");
+
+    // Intentar leer la última ubicación GPS conocida del vendedor en Firebase.
+    // Si el vendedor tiene GPS activo, usamos esas coords. Si no, fallback al
+    // VENDOR_COORDS estático. Esto resuelve el bug de "vendedor en Bella Vista
+    // cuando realmente está en Brisas del Golf".
+    let vendorLat = vendorStaticOrder.lat;
+    let vendorLng = vendorStaticOrder.lng;
+    try {
+      const ubicVendedor = await fbRead(`ubicaciones/${vendorUserIdOrder}`);
+      if (ubicVendedor && ubicVendedor.lat && ubicVendedor.lng) {
+        // GPS reciente del vendedor (última hora)
+        const ageMs = Date.now() - (ubicVendedor.timestamp || 0);
+        if (ageMs < 60 * 60 * 1000) {
+          vendorLat = ubicVendedor.lat;
+          vendorLng = ubicVendedor.lng;
+        }
+      }
+    } catch(e) { /* sin GPS, usar static */ }
     items.forEach(item => {
       if (item.type==="billete")
         setSharedBilletes(p=>p.map(b=>b.n===item.num?{...b,sold:Math.min(b.stock,b.sold+item.qty)}:b));
@@ -9019,11 +9177,15 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       items:items.map(i=>({type:i.type,num:i.num,qty:i.qty,price:i.price,subtotal:(i.price*i.qty).toFixed(2)})),
       itemCount:items.length, vendor:items[0].vendor||"Carlos Medina V001",
       vendorId: vendorIdOrder, lotteryValue:lotteryTotal.toFixed(2),
-      vendorUserId: vendorIdOrder === "V001" ? "vendedor_carlos" : "vendedor_rosa",
-      // Zona aproximada que se mostrará al comprador en el mapa de tracking.
-      // Tomamos la del corregimiento real del vendedor (su perfil), no su dirección exacta.
-      vendorZone: vendorStaticOrder.zone,
-      vendorLugar: vendorStaticOrder.zone,
+      vendorUserId: vendorUserIdOrder,
+      // Zona aproximada del vendedor para mostrar al comprador en el mapa.
+      // Prioridad: zona del item del carrito (vendedor real) > zona estática (demo).
+      vendorZone:  items[0].vendorZone || vendorStaticOrder.zone,
+      vendorLugar: items[0].vendorZone || vendorStaticOrder.zone,
+      // Coordenadas del vendedor al momento del pedido (de GPS o fallback static).
+      // El comprador usará esto para mostrar el círculo aproximado en el mapa.
+      vendorLat,
+      vendorLng,
       // Delivery dinámico según distancia (fallback $2.50 si no se calculó)
       deliveryFee: deliveryMeta?.fee || "2.50",
       deliveryDistKm: deliveryMeta?.distKm || null,
@@ -9181,8 +9343,9 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       pickupStarted: true,
       pickupStartedAt: ts(),
       pickupStartedAtMs: Date.now(),
-      assignedRepartidorId: "repartidor_juan", // demo-fixed; en prod sale del usuario actual
-      history: [...(o.history||[]), { by: "repartidor", action: "Inició recogida — en camino al vendedor", at: ts() }],
+      assignedRepartidorId: authUser?.id || "repartidor_juan", // ID real del repartidor logueado
+      assignedRepartidorName: authUser?.nombre || "Juan Rodríguez",
+      history: [...(o.history||[]), { by: "repartidor", action: `${authUser?.nombre||"Juan Rodríguez"} inició recogida`, at: ts() }],
     };
   }));
   const assignOrder  = id => setSharedOrders(p=>p.map(o=>{
@@ -9192,7 +9355,14 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       console.warn(`No se puede iniciar entrega de ${id}: el vendedor no ha aprobado (estado actual: ${o.status})`);
       return o; // No cambia el estado
     }
-    return {...o, status:"EN_CAMINO", assignedAt:ts()};
+    return {
+      ...o,
+      status:"EN_CAMINO",
+      assignedAt:ts(),
+      // Asegurar identidad del repartidor real (por si llega por flujo legacy sin pickupStarted)
+      assignedRepartidorId:   o.assignedRepartidorId   || authUser?.id     || "repartidor_juan",
+      assignedRepartidorName: o.assignedRepartidorName || authUser?.nombre || "Juan Rodríguez",
+    };
   }));
   const deliverOrder = id => setSharedOrders(p=>p.map(o=>o.id!==id?o:{...o,status:"ENTREGADO",deliveredAt:ts()}));
 
@@ -9282,9 +9452,9 @@ function App({ forceRole=null, authUser=null, onLogout=null,
     notifySound("cancel");
     vendorRejectReplacement(orderId);
   };
-  const placeOrderWithSound = (items, method, addr, deliveryMeta) => {
+  const placeOrderWithSound = async (items, method, addr, deliveryMeta) => {
     notifySound("new_order");
-    return placeOrder(items, method, addr, deliveryMeta);
+    return await placeOrder(items, method, addr, deliveryMeta);
   };
 
   const nav = target => {
@@ -9350,11 +9520,11 @@ function App({ forceRole=null, authUser=null, onLogout=null,
     switch(screen){
       // ── CLIENTE
       case "home_cliente": return <ClienteHome cart={cart} nav={nav}
-        sharedVendor={sharedVendor}
+        sharedVendor={sharedVendor} activeVendors={activeVendors}
         activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
-      case "buscar":       return <BuscarScreen nav={nav} sharedVendor={sharedVendor}/>;
+      case "buscar":       return <BuscarScreen nav={nav} sharedVendor={sharedVendor} activeVendors={activeVendors}/>;
       case "suerte":       return <SuerteScreen/>
-      case "explorar":     return <ExplorarScreen nav={nav} sharedVendor={sharedVendor}/>;
+      case "explorar":     return <ExplorarScreen nav={nav} sharedVendor={sharedVendor} activeVendors={activeVendors}/>;
       case "tablero":      return <TableroScreen
         vendor={screenData?.vendor||sharedVendor}
         cart={cart} setCart={setCart} nav={nav}/>;
@@ -9377,6 +9547,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       case "perfil_c":     return <PerfilScreen authUser={authUser} onLogout={onLogout} currentRole={role} onSwitchRole={switchRole}/>;
       // ── VENDEDOR
       case "home_vendedor": return <VendedorHome
+        authUser={authUser}
         billetes={sharedBilletes} setBilletes={setSharedBilletes}
         chances={sharedChances}   setChances={setSharedChances}
         orders={sharedOrders}     onApprove={approveOrder}
@@ -9388,6 +9559,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
         setActiveSorteo={setVendorActiveSorteo}
         initTab="tablero"/>;
       case "pedidos_v":    return <VendedorHome
+        authUser={authUser}
         billetes={sharedBilletes} setBilletes={setSharedBilletes}
         chances={sharedChances}   setChances={setSharedChances}
         orders={sharedOrders}     onApprove={approveOrder}
@@ -9400,6 +9572,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
         initTab="pedidos"
         showOnlyTab="pedidos"/>;
       case "kardex_v":     return <VendedorHome
+        authUser={authUser}
         billetes={sharedBilletes} setBilletes={setSharedBilletes}
         chances={sharedChances}   setChances={setSharedChances}
         orders={sharedOrders}     onApprove={approveOrder}
@@ -9413,28 +9586,28 @@ function App({ forceRole=null, authUser=null, onLogout=null,
         showOnlyTab="kardex"/>;
       case "perfil_v":     return <PerfilScreen authUser={authUser} onLogout={onLogout} currentRole={role} onSwitchRole={switchRole}/>;
       // ── REPARTIDOR
-      case "home_repartidor": return <RepartidorHome
+      case "home_repartidor": return <RepartidorHome authUser={authUser}
         orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
-      case "entregas_r":   return <RepartidorHome
+      case "entregas_r":   return <RepartidorHome authUser={authUser}
         orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
-      case "batch_r":      return <RepartidorHome
+      case "batch_r":      return <RepartidorHome authUser={authUser}
         orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="batch"/>;
-      case "billetera_r":  return <RepartidorHome
+      case "billetera_r":  return <RepartidorHome authUser={authUser}
         orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="liquidacion"/>;
       case "perfil_v":     return <PerfilScreen authUser={authUser} onLogout={onLogout} currentRole={role} onSwitchRole={switchRole}/>;
       // ── REPARTIDOR
-      case "home_repartidor": return <RepartidorHome
+      case "home_repartidor": return <RepartidorHome authUser={authUser}
         orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
-      case "entregas_r":   return <RepartidorHome
+      case "entregas_r":   return <RepartidorHome authUser={authUser}
         orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
-      case "batch_r":      return <RepartidorHome
+      case "batch_r":      return <RepartidorHome authUser={authUser}
         orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="batch"/>;
-      case "billetera_r":  return <RepartidorHome
+      case "billetera_r":  return <RepartidorHome authUser={authUser}
         orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="liquidacion"/>;
       default:
-        if (role==="vendedor")   return <VendedorHome   billetes={sharedBilletes} setBilletes={setSharedBilletes} chances={sharedChances} setChances={setSharedChances} orders={sharedOrders} onApprove={approveOrder} onModify={modifyOrderWithSound} onApproveReplacement={vendorApproveReplacementWithSound} onRejectReplacement={vendorRejectReplacementWithSound} onCancelByVendor={vendorCancelOrder} activeSorteo={vendorActiveSorteo} setActiveSorteo={setVendorActiveSorteo} initTab="tablero"/>;
-        if (role==="repartidor") return <RepartidorHome orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
-        return <ClienteHome cart={cart} nav={nav} sharedVendor={sharedVendor} activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
+        if (role==="vendedor")   return <VendedorHome   authUser={authUser} billetes={sharedBilletes} setBilletes={setSharedBilletes} chances={sharedChances} setChances={setSharedChances} orders={sharedOrders} onApprove={approveOrder} onModify={modifyOrderWithSound} onApproveReplacement={vendorApproveReplacementWithSound} onRejectReplacement={vendorRejectReplacementWithSound} onCancelByVendor={vendorCancelOrder} activeSorteo={vendorActiveSorteo} setActiveSorteo={setVendorActiveSorteo} initTab="tablero"/>;
+        if (role==="repartidor") return <RepartidorHome authUser={authUser} orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
+        return <ClienteHome cart={cart} nav={nav} sharedVendor={sharedVendor} activeVendors={activeVendors} activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
     }
   };
 
@@ -10123,7 +10296,7 @@ function RegisterScreen({ onRegister, onGoLogin }) {
         // Subimos también a Firebase (path: users) para que el admin y otros
         // dispositivos vean al usuario recién registrado. Si Firebase falla,
         // no es crítico — el usuario quedó guardado localmente.
-        try { await fbWrite("users", updatedUsers); } catch(fbErr) { console.warn("Firebase users sync failed:", fbErr); }
+        try { await fbWrite("users", stripUserPhotos(updatedUsers)); } catch(fbErr) { console.warn("Firebase users sync failed:", fbErr); }
       } catch(e) {}
       onRegister(newUser);
     } catch(e) {
@@ -10559,7 +10732,7 @@ function AdminPanel({ adminUser, onLogout }) {
     await setUsers(updated);
     // Sincronizar con Firebase para que el cambio (ej. aprobación) llegue
     // al usuario en su propio dispositivo
-    try { await fbWrite("users", updated); } catch(e) { console.warn("FB sync failed:", e); }
+    try { await fbWrite("users", stripUserPhotos(updated)); } catch(e) { console.warn("FB sync failed:", e); }
     if (selectedUser?.id===uid) setSelectedUser(prev=>({...prev,...patch}));
     toast("✅ Usuario actualizado");
   };
@@ -10568,7 +10741,7 @@ function AdminPanel({ adminUser, onLogout }) {
     if (!window.confirm("¿Eliminar usuario permanentemente?")) return;
     const updated = users.filter(u=>u.id!==uid);
     await setUsers(updated);
-    try { await fbWrite("users", updated); } catch(e) { console.warn("FB sync failed:", e); }
+    try { await fbWrite("users", stripUserPhotos(updated)); } catch(e) { console.warn("FB sync failed:", e); }
     setSelectedUser(null);
     toast("🗑 Usuario eliminado");
   };
@@ -11288,6 +11461,10 @@ export default function ChanceRoot() {
   const [sharedBilletes, setSharedBilletes] = useState(VENDORS[0].billetes);
   const [sharedChances,  setSharedChances]  = useState(VENDORS[0].chances);
   const [sharedOrders,   setSharedOrders]   = useState([]);
+  // Lista global de usuarios — necesaria para que el comprador vea TODOS los
+  // vendedores activos (no solo Carlos y Rosa estáticos). Se hidrata desde
+  // window.storage y se sincroniza con Firebase.
+  const [allUsers,       setAllUsers]       = useState([]);
   // Sorteo activo del vendedor — compartido vía Firebase para que el comprador
   // vea siempre el mismo sorteo que tiene activo el vendedor en su tablero.
   const sorteoInicialRoot = (SORTEOS_RECIENTES && SORTEOS_RECIENTES[0]) || SORTEOS_RECIENTES_SEED[0];
@@ -11298,7 +11475,52 @@ export default function ChanceRoot() {
   const billetesHashRef  = useRef("");
   const chancesHashRef   = useRef("");
   const sorteoVendorRef  = useRef("");
-  const skipNextSyncRef  = useRef({ orders: false, billetes: false, chances: false, sorteoVendor: false });
+  const usersHashRef     = useRef("");
+  const skipNextSyncRef  = useRef({ orders: false, billetes: false, chances: false, sorteoVendor: false, users: false });
+
+  // ── DERIVAR LISTA DE VENDEDORES ACTIVOS (estáticos + reales) ─────────────
+  // Combina los demos hardcoded (VENDORS) con los vendedores reales
+  // aprobados por el admin. Un vendedor aparece aquí solo si:
+  //   - rol === "vendedor"
+  //   - status === "ACTIVO"
+  //   - Tiene numeroBilletero (código V001, V002...)
+  // El vendedor demo "Carlos Medina" ya viene en VENDORS — no lo duplicamos.
+  const activeVendors = (() => {
+    const realVendors = (allUsers || [])
+      .filter(u => u?.rol === "vendedor" && u?.status === "ACTIVO" && u?.numeroBilletero)
+      .map(u => {
+        // Traducir el formato users_db al formato VENDORS para que las
+        // pantallas existentes funcionen sin tocarse.
+        const codigo = u.numeroBilletero;
+        const nombreCompleto = u.nombre || "Vendedor";
+        // Filtrar inventario global del vendedor por su userId (los items
+        // están etiquetados con vendorOwnerId al añadirlos en su tablero).
+        const myBilletes = (sharedBilletes || []).filter(b => b.vendorOwnerId === u.id);
+        const myChances  = (sharedChances  || []).filter(c => c.vendorOwnerId === u.id);
+        return {
+          id: codigo,                          // ej "V003" — único y estable
+          name: nombreCompleto,
+          rating: 5.0, reviews: 0,
+          zone: u.lugarVende || u.corregimiento || "Panamá",
+          distance: "—", time: "20–35 min",
+          verified: true,
+          sorteo: vendorActiveSorteo?.fecha || "",
+          billetes: myBilletes,
+          chances:  myChances,
+          // Identidad para el motor de pedidos
+          userId: u.id, telefono: u.telefono,
+        };
+      });
+    // Demos VENDORS al frente, después los reales (filtrando duplicados por id)
+    const realIds = new Set(realVendors.map(v => v.id));
+    const demos = VENDORS.filter(v => {
+      // El demo Carlos (V001) coincide con el demo_v de users_db. Si ambos
+      // existen, preferimos el real (que tiene userId real para Firebase).
+      if (v.id === 1 && realVendors.some(r => r.id === "V001")) return false;
+      return true;
+    });
+    return [...demos, ...realVendors];
+  })();
 
   // ════════════════════════════════════════════════════════════════════
   // SINCRONIZACIÓN CON FIREBASE (en lugar de window.storage local)
@@ -11436,7 +11658,35 @@ export default function ChanceRoot() {
       } catch(e) { console.warn("Listener admin_cfg:", e.message); }
     }, 5000);
 
-    return () => { stopPedidos(); stopBilletes(); stopChances(); stopSorteoVendor(); stopAdminCfg(); };
+    // 7. Listener para USUARIOS (so el comprador ve nuevos vendedores activos).
+    // Cuando el admin aprueba/suspende un vendedor, los cambios llegan a
+    // todos los dispositivos en ~5s y la lista de vendedores se actualiza.
+    const stopUsers = fbListen("users", (data) => {
+      try {
+        if (Array.isArray(data)) {
+          const newHash = JSON.stringify(data);
+          if (newHash !== usersHashRef.current) {
+            usersHashRef.current = newHash;
+            setAllUsers(data);
+            // También actualizamos el storage local para uso offline
+            try { window.storage.set("users_db", JSON.stringify(data)); } catch(e) {}
+          }
+        }
+      } catch(e) { console.warn("Listener users:", e.message); }
+    }, 5000);
+
+    // Cargar usuarios iniciales desde storage local mientras Firebase responde
+    (async () => {
+      try {
+        const r = await window.storage.get("users_db");
+        if (r?.value) {
+          const local = JSON.parse(r.value);
+          if (Array.isArray(local) && local.length > 0) setAllUsers(local);
+        }
+      } catch(e) {}
+    })();
+
+    return () => { stopPedidos(); stopBilletes(); stopChances(); stopSorteoVendor(); stopAdminCfg(); stopUsers(); };
   }, []);
 
   // Subir pedidos a Firebase cada vez que cambien (excepto cuando vinieron de Firebase)
@@ -11497,6 +11747,10 @@ export default function ChanceRoot() {
 
   // Seed demo users and restore session on mount
   useEffect(() => {
+    // SAFETY: si por alguna razón el bootstrap se cuelga (Firebase lento,
+    // storage corrupto, etc.), forzamos setBooting(false) tras 6 segundos
+    // para que el usuario al menos vea la pantalla de login.
+    const safety = setTimeout(() => setBooting(false), 6000);
     (async () => {
       try {
         const r = await window.storage.get("users_db");
@@ -11517,18 +11771,23 @@ export default function ChanceRoot() {
           if (Array.isArray(fb)) fbUsers = fb;
         } catch(e) { /* sin Firebase, OK */ }
         // Merge: demos primero, después usuarios locales/Firebase (sin duplicar emails)
-        const allUsers = [...existing, ...fbUsers.filter(f => !existing.find(e => e.email === f.email))];
-        const merged = [...demos.filter(d=>!allUsers.find(e=>e.email===d.email)), ...allUsers];
+        const allUsersLocal = [...existing, ...fbUsers.filter(f => !existing.find(e => e.email === f.email))];
+        const merged = [...demos.filter(d=>!allUsersLocal.find(e=>e.email===d.email)), ...allUsersLocal];
         await window.storage.set("users_db", JSON.stringify(merged));
-        // Subir merge final a Firebase (asegura que demos están disponibles cross-device)
-        try { await fbWrite("users", merged); } catch(e) {}
+        // Subir merge a Firebase, pero SIN fotos (las fotos pueden ser ~300KB
+        // c/u en base64 y harían el payload demasiado grande para Firebase).
+        // Las fotos solo viven en window.storage local de cada dispositivo.
+        try {
+          await fbWrite("users", stripUserPhotos(merged));
+        } catch(e) {}
         const sr = await window.storage.get("active_session");
         if (sr?.value) {
           const sess = JSON.parse(sr.value);
           const u = merged.find(x=>x.id===sess.userId);
           if (u && u.status!=="SUSPENDIDO") setAuthUser(u);
         }
-      } catch(e) {}
+      } catch(e) { console.warn("Bootstrap error:", e); }
+      clearTimeout(safety);
       setBooting(false);
     })();
   }, []);
@@ -11602,5 +11861,6 @@ export default function ChanceRoot() {
     sharedChances={sharedChances}   setSharedChances={setSharedChances}
     sharedOrders={sharedOrders}     setSharedOrders={setSharedOrders}
     vendorActiveSorteo={vendorActiveSorteo} setVendorActiveSorteo={setVendorActiveSorteo}
+    activeVendors={activeVendors}
   /></>;
 }
