@@ -489,16 +489,16 @@ const UPDATER_URL = "https://chance-updater.edgarpino-d1e.workers.dev"; // ⚠�
 const SORTEOS_RECIENTES_SEED = [
   {
     tipo: "MIERCOLITO", icon: "⚡", color: "#3B9EFF", bg: "rgba(59,158,255,.1)", border: "rgba(59,158,255,.28)",
-    sorteoN: "3062", fecha: "29 de abril de 2026",
+    sorteoN: "3063", fecha: "6 de mayo de 2026",
     premios: [
-      { pos: "1er Premio", num: "2354", letras: "BDCA", serie: "13", folio: "11" },
-      { pos: "2do Premio", num: "7359", letras: "", serie: "", folio: "" },
-      { pos: "3er Premio", num: "7329", letras: "", serie: "", folio: "" },
+      { pos: "1er Premio", num: "4757", letras: "BBCB", serie: "24", folio: "6" },
+      { pos: "2do Premio", num: "6046", letras: "", serie: "", folio: "" },
+      { pos: "3er Premio", num: "5808", letras: "", serie: "", folio: "" },
     ],
     premioMayor: "$100,000",
-    proximoISO: "2026-05-06T15:00:00",
+    proximoISO: "2026-05-13T15:00:00",
     frecuencia: "Cada miércoles",
-    // pendienteVerificacion removido: datos confirmados desde LNB.gob.pa el 05/05/2026
+    // datos confirmados desde nacionalloteria.com el 06/05/2026
   },
   {
     tipo: "EXTRAORDINARIA", icon: "💎", color: "#A78BFA", bg: "rgba(167,139,250,.1)", border: "rgba(167,139,250,.28)",
@@ -2797,6 +2797,8 @@ const HISTORIAL_SEED = [
   // Fuente: lnb.gob.pa (oficial) + laestrella.com.pa + telemetro.com (confirmatorias)
   // Numeración: Miercolito 3062 = 29 Abr 2026, Dominical 5550 = 03 May 2026, Gordito 408 = 27 Mar 2026
   // MAY 2026
+  { tipo:"MIERCOLITO",  sorteoN:"3063", fecha:"06 May 2026", mes:5, anio:2026,
+    premios:[{pos:"1er",num:"4757",letras:"BBCB",serie:"24",folio:"6"},{pos:"2do",num:"6046"},{pos:"3er",num:"5808"}] },
   { tipo:"DOMINICAL",   sorteoN:"5550", fecha:"03 May 2026", mes:5, anio:2026,
     premios:[{pos:"1er",num:"4924",letras:"DBAB",serie:"9",folio:"2"},{pos:"2do",num:"1823"},{pos:"3er",num:"3400"}] },
   // ABR 2026
