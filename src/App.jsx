@@ -1306,26 +1306,31 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[] }) {
         <div className="sec" style={{marginBottom:0}}>Vendedores Cercanos</div>
         <button onClick={()=>nav("explorar")} style={{fontSize:11,color:"var(--gold)",fontWeight:700,background:"none",border:"none",cursor:"pointer"}}>Ver todos →</button>
       </div>
-      {VENDORS.map(v=>(
-        <div key={v.id} className="card" style={{cursor:"pointer"}} onClick={()=>nav({screen:"tablero",vendor:v})}>
+      {VENDORS.map(v=>{
+        // Para Carlos Medina (V001), usar sharedVendor que tiene los datos
+        // sincronizados (sorteo activo, billetes, chances actualizados).
+        const vendorData = (v.id === 1 && sharedVendor) ? { ...v, ...sharedVendor } : v;
+        return (
+        <div key={v.id} className="card" style={{cursor:"pointer"}} onClick={()=>nav({screen:"tablero",vendor:vendorData})}>
           <div className="row" style={{justifyContent:"space-between",marginBottom:7}}>
             <div className="row" style={{gap:9}}>
               <div style={{width:40,height:40,borderRadius:12,background:"rgba(244,196,48,.12)",border:"1px solid rgba(244,196,48,.18)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Bebas Neue'",fontSize:15,color:"var(--gold)",flexShrink:0}}>
-                {v.name.split(" ").map(w=>w[0]).join("")}
+                {vendorData.name.split(" ").map(w=>w[0]).join("")}
               </div>
               <div>
-                <div style={{fontWeight:800,fontSize:13,color:"var(--text)"}}>{v.name} {v.verified&&"✅"}</div>
-                <div style={{fontSize:10,color:"var(--muted)"}}>⭐{v.rating} · {v.distance} · {v.time}</div>
+                <div style={{fontWeight:800,fontSize:13,color:"var(--text)"}}>{vendorData.name} {vendorData.verified&&"✅"}</div>
+                <div style={{fontSize:10,color:"var(--muted)"}}>⭐{vendorData.rating} · {vendorData.distance} · {vendorData.time}</div>
               </div>
             </div>
           </div>
           <div className="row" style={{gap:8}}>
-            <span className="tag-b">🎟 {v.billetes.filter(b=>b.sold<b.stock).length} billetes</span>
-            <span className="tag-c">⚡ {v.chances.filter(c=>c.sold<c.stock).length} chances</span>
+            <span className="tag-b">🎟 {vendorData.billetes.filter(b=>b.sold<b.stock).length} billetes</span>
+            <span className="tag-c">⚡ {vendorData.chances.filter(c=>c.sold<c.stock).length} chances</span>
             <span style={{fontSize:11,color:"var(--gold)",fontWeight:700,marginLeft:"auto"}}>Ver →</span>
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -1333,7 +1338,7 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[] }) {
 /* ═══════════════════════════════════════════════════════
    PANTALLA: BUSCAR NÚMERO  ★ nueva funcionalidad
 ═══════════════════════════════════════════════════════ */
-function BuscarScreen({ nav }) {
+function BuscarScreen({ nav, sharedVendor }) {
   const [q, setQ] = useState("");
   const [tipo, setTipo] = useState("ambos"); // billete | chance | ambos
 
@@ -1403,7 +1408,11 @@ function BuscarScreen({ nav }) {
             const isChance = r.type === "chance";
             return (
               <div key={i} className="card" style={{cursor:"pointer",marginBottom:10,border:`1px solid ${isChance?"rgba(59,158,255,.25)":"rgba(244,196,48,.25)"}`}}
-                onClick={()=>nav({screen:"tablero",vendor:r.vendor})}>
+                onClick={()=>{
+                  // Si el resultado es de Carlos Medina (V001), usar sharedVendor con datos sincronizados
+                  const v = (r.vendor.id === 1 && sharedVendor) ? { ...r.vendor, ...sharedVendor } : r.vendor;
+                  nav({screen:"tablero",vendor:v});
+                }}>
                 {/* Cabecera vendedor */}
                 <div className="row" style={{justifyContent:"space-between",marginBottom:10}}>
                   <div className="row" style={{gap:8}}>
@@ -1480,7 +1489,7 @@ function BuscarScreen({ nav }) {
 /* ═══════════════════════════════════════════════════════
    PANTALLA: EXPLORAR — con buscador y filtro sorteo
 ═══════════════════════════════════════════════════════ */
-function ExplorarScreen({ nav }) {
+function ExplorarScreen({ nav, sharedVendor }) {
   const [q, setQ] = useState("");
   const [sorteoF, setSorteoF] = useState("todos");
 
@@ -1533,7 +1542,10 @@ function ExplorarScreen({ nav }) {
           <div style={{fontSize:14,fontWeight:700,color:"var(--text)",marginBottom:4}}>Sin resultados</div>
           <div style={{fontSize:11,color:"var(--muted)"}}>Intenta con otro nombre, código o sorteo</div>
         </div>
-      ) : filtered.map(v=>(
+      ) : filtered.map(vRaw=>{
+        // Para Carlos Medina (V001), reemplazar con sharedVendor sincronizado
+        const v = (vRaw.id === 1 && sharedVendor) ? { ...vRaw, ...sharedVendor } : vRaw;
+        return (
         <div key={v.id} className="card" style={{cursor:"pointer"}} onClick={()=>nav({screen:"tablero",vendor:v})}>
           <div className="row" style={{gap:10,marginBottom:10}}>
             <div style={{width:46,height:46,borderRadius:14,background:"rgba(244,196,48,.1)",border:"1px solid rgba(244,196,48,.18)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--gold)",flexShrink:0}}>
@@ -1564,7 +1576,8 @@ function ExplorarScreen({ nav }) {
           </div>
           <button className="btn" style={{fontSize:13}}>Ver tablero completo</button>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -8878,7 +8891,8 @@ const NAV={
 function App({ forceRole=null, authUser=null, onLogout=null,
   sharedBilletes, setSharedBilletes,
   sharedChances, setSharedChances,
-  sharedOrders, setSharedOrders }) {
+  sharedOrders, setSharedOrders,
+  vendorActiveSorteo, setVendorActiveSorteo }) {
   const [phase,        setPhase]       = useState(forceRole?"app":"splash");
   const [role,         setRole]        = useState(forceRole);
   const [activeRole,   setActiveRole]  = useState(forceRole);
@@ -9253,14 +9267,16 @@ function App({ forceRole=null, authUser=null, onLogout=null,
   };
 
   // ── Sorteo activo del vendedor (compartido con el comprador) ─────────────
-  const [vendorActiveSorteo, setVendorActiveSorteo] = useState(SORTEOS_RECIENTES[0]);
+  // Viene de ChanceRoot como prop para sincronizar via Firebase
+  const sorteoInicialFallback = (SORTEOS_RECIENTES && SORTEOS_RECIENTES[0]) || SORTEOS_RECIENTES_SEED[0];
+  const sorteoEffective = vendorActiveSorteo || sorteoInicialFallback;
 
   const sharedVendor = {
     ...VENDORS[0],
     billetes: sharedBilletes,
     chances:  sharedChances,
-    sorteo:   `${vendorActiveSorteo.icon} ${vendorActiveSorteo.tipo} · ${vendorActiveSorteo.fecha}`,
-    sorteoData: vendorActiveSorteo,
+    sorteo:   `${sorteoEffective?.icon||"⚡"} ${sorteoEffective?.tipo||"MIERCOLITO"} · ${sorteoEffective?.fecha||""}`,
+    sorteoData: sorteoEffective,
   };
 
   const renderScreen = () => {
@@ -9273,7 +9289,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
         activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
       case "buscar":       return <BuscarScreen nav={nav} sharedVendor={sharedVendor}/>;
       case "suerte":       return <SuerteScreen/>
-      case "explorar":     return <ExplorarScreen nav={nav}/>;
+      case "explorar":     return <ExplorarScreen nav={nav} sharedVendor={sharedVendor}/>;
       case "tablero":      return <TableroScreen
         vendor={screenData?.vendor||sharedVendor}
         cart={cart} setCart={setCart} nav={nav}/>;
@@ -11071,12 +11087,17 @@ export default function ChanceRoot() {
   const [sharedBilletes, setSharedBilletes] = useState(VENDORS[0].billetes);
   const [sharedChances,  setSharedChances]  = useState(VENDORS[0].chances);
   const [sharedOrders,   setSharedOrders]   = useState([]);
+  // Sorteo activo del vendedor — compartido vía Firebase para que el comprador
+  // vea siempre el mismo sorteo que tiene activo el vendedor en su tablero.
+  const sorteoInicialRoot = (SORTEOS_RECIENTES && SORTEOS_RECIENTES[0]) || SORTEOS_RECIENTES_SEED[0];
+  const [vendorActiveSorteo, setVendorActiveSorteo] = useState(sorteoInicialRoot);
   const [stateLoaded,    setStateLoaded]    = useState(false);
   // Refs para evitar bucles infinitos al sincronizar con Firebase
   const ordersHashRef    = useRef("");
   const billetesHashRef  = useRef("");
   const chancesHashRef   = useRef("");
-  const skipNextSyncRef  = useRef({ orders: false, billetes: false, chances: false });
+  const sorteoVendorRef  = useRef("");
+  const skipNextSyncRef  = useRef({ orders: false, billetes: false, chances: false, sorteoVendor: false });
 
   // ════════════════════════════════════════════════════════════════════
   // SINCRONIZACIÓN CON FIREBASE (en lugar de window.storage local)
@@ -11127,6 +11148,18 @@ export default function ChanceRoot() {
           setSharedChances(chances);
           chancesHashRef.current = JSON.stringify(chances);
         }
+        // Sorteo activo del vendedor — leemos en un segundo paso (no bloquea init)
+        try {
+          const sorteoVendor = await fbRead("vendedor_v001/sorteoActivo");
+          if (sorteoVendor && typeof sorteoVendor === "object" && sorteoVendor.tipo) {
+            const matched = SORTEOS_RECIENTES.find(s => s.tipo === sorteoVendor.tipo);
+            if (matched) {
+              skipNextSyncRef.current.sorteoVendor = true;
+              setVendorActiveSorteo(matched);
+              sorteoVendorRef.current = JSON.stringify({ tipo: matched.tipo });
+            }
+          }
+        } catch(e2) { /* silent */ }
       } catch(e) { console.warn("Error cargando datos:", e.message); }
       setStateLoaded(true);
     })();
@@ -11161,7 +11194,25 @@ export default function ChanceRoot() {
       }
     }, 3000);
 
-    return () => { stopPedidos(); stopBilletes(); stopChances(); };
+    // 5. Listener para SORTEO ACTIVO DEL VENDEDOR
+    // El comprador necesita saber qué sorteo está activo en el tablero del
+    // vendedor para mostrar los billetes correctos. Polling 3s.
+    const stopSorteoVendor = fbListen("vendedor_v001/sorteoActivo", (data) => {
+      try {
+        if (!data || typeof data !== "object" || !data.tipo) return;
+        const newHash = JSON.stringify({ tipo: data.tipo });
+        if (newHash !== sorteoVendorRef.current) {
+          sorteoVendorRef.current = newHash;
+          const matched = SORTEOS_RECIENTES.find(s => s.tipo === data.tipo);
+          if (matched) {
+            skipNextSyncRef.current.sorteoVendor = true;
+            setVendorActiveSorteo(matched);
+          }
+        }
+      } catch(e) { console.warn("Listener sorteoVendor:", e.message); }
+    }, 3000);
+
+    return () => { stopPedidos(); stopBilletes(); stopChances(); stopSorteoVendor(); };
   }, []);
 
   // Subir pedidos a Firebase cada vez que cambien (excepto cuando vinieron de Firebase)
@@ -11202,6 +11253,23 @@ export default function ChanceRoot() {
     chancesHashRef.current = newHash;
     fbWrite("chances", sharedChances);
   }, [sharedChances, stateLoaded]);
+
+  // Subir SORTEO ACTIVO del vendedor a Firebase
+  // Cuando el vendedor cambia su sorteo en el tablero, se publica para que
+  // los compradores vean los billetes correctos del sorteo seleccionado.
+  useEffect(() => {
+    if (!stateLoaded) return;
+    if (!vendorActiveSorteo || !vendorActiveSorteo.tipo) return;
+    if (skipNextSyncRef.current.sorteoVendor) {
+      skipNextSyncRef.current.sorteoVendor = false;
+      return;
+    }
+    const payload = { tipo: vendorActiveSorteo.tipo, sorteoN: vendorActiveSorteo.sorteoN || "", fecha: vendorActiveSorteo.fecha || "" };
+    const newHash = JSON.stringify({ tipo: payload.tipo });
+    if (newHash === sorteoVendorRef.current) return;
+    sorteoVendorRef.current = newHash;
+    fbWrite("vendedor_v001/sorteoActivo", payload);
+  }, [vendorActiveSorteo, stateLoaded]);
 
   // Seed demo users and restore session on mount
   useEffect(() => {
@@ -11296,5 +11364,6 @@ export default function ChanceRoot() {
     sharedBilletes={sharedBilletes} setSharedBilletes={setSharedBilletes}
     sharedChances={sharedChances}   setSharedChances={setSharedChances}
     sharedOrders={sharedOrders}     setSharedOrders={setSharedOrders}
+    vendorActiveSorteo={vendorActiveSorteo} setVendorActiveSorteo={setVendorActiveSorteo}
   /></>;
 }
