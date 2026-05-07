@@ -615,10 +615,12 @@ const ADDRESSES = [
    └─────────────────────────────────────────────────────┘
 ═══════════════════════════════════════════════════════ */
 
-// Constantes en centavos×100 para evitar floats
-const PE = {
-  COMMISSION_BP: 250,    // 2.50% = 250 basis points
-  SERVICE_FEE:   100,    // $1.00 × 100
+// Constantes en centavos×100 para evitar floats.
+// IMPORTANTE: Son let (no const) para que puedan actualizarse desde el panel
+// del admin. La función applyAdminCfg() las actualiza en runtime.
+let PE = {
+  COMMISSION_BP: 250,    // 2.50% = 250 basis points (paga el vendedor)
+  SERVICE_FEE:   100,    // $1.00 × 100 (paga el cliente)
   SCALE:         100,    // multiplicador: $1.00 → 100
 };
 
@@ -744,16 +746,51 @@ function calcYappyFlow(t) {
    5     | 15 – 25 km   | $10.00
    6     | > 25 km      | $10.00 + $0.40/km extra
 ═══════════════════════════════════════════════════════ */
-const DELIVERY_TIERS = [
+// Tarifas de delivery — let porque pueden ser actualizadas por el admin
+let DELIVERY_TIERS = [
   { maxKm: 3,   fee: 2.50, label: "Zona local" },
   { maxKm: 6,   fee: 3.50, label: "Zona cercana" },
   { maxKm: 10,  fee: 5.00, label: "Zona media" },
   { maxKm: 15,  fee: 7.00, label: "Zona lejana" },
   { maxKm: 25,  fee: 10.00,label: "Zona extendida" },
 ];
-const DELIVERY_EXTRA_PER_KM = 0.40; // $/km después de 25 km
+let DELIVERY_EXTRA_PER_KM = 0.40; // $/km después de 25 km
 const DELIVERY_EXTRA_BASE   = 10.00;
 const DELIVERY_EXTRA_FROM   = 25;
+
+/**
+ * Aplica una configuración del admin al motor de cálculos del backend.
+ * Cuando el admin guarda cambios en Comisiones/Delivery, esta función
+ * actualiza las variables módulo para que `calcOrderTotals` y
+ * `calcDeliveryFee` usen los nuevos valores en cálculos futuros.
+ *
+ * Nota: Pedidos ya creados conservan los valores con los que se calcularon.
+ * Solo afecta cálculos NUEVOS (carritos, pedidos siguientes).
+ */
+function applyAdminCfg(cfg) {
+  if (!cfg || typeof cfg !== "object") return;
+  // Comisión App
+  if (typeof cfg.commissionPctVendor === "number" && cfg.commissionPctVendor >= 0) {
+    PE.COMMISSION_BP = Math.round(cfg.commissionPctVendor * 100); // 2.5% → 250 bp
+  }
+  // Service fee
+  if (typeof cfg.serviceFeeUSD === "number" && cfg.serviceFeeUSD >= 0) {
+    PE.SERVICE_FEE = Math.round(cfg.serviceFeeUSD * 100); // $1.00 → 100
+  }
+  // Tarifas de delivery por distancia
+  if (Array.isArray(cfg.deliveryTiers) && cfg.deliveryTiers.length > 0) {
+    // Reusamos las labels originales si solo cambian montos
+    DELIVERY_TIERS = cfg.deliveryTiers.map((t, i) => ({
+      maxKm: t.maxKm,
+      fee:   typeof t.fee === "number" ? t.fee : parseFloat(t.fee) || 0,
+      label: t.label || (DELIVERY_TIERS[i] && DELIVERY_TIERS[i].label) || "Zona",
+    }));
+  }
+  // Extra por km
+  if (typeof cfg.deliveryExtraPerKm === "number" && cfg.deliveryExtraPerKm >= 0) {
+    DELIVERY_EXTRA_PER_KM = cfg.deliveryExtraPerKm;
+  }
+}
 
 /** Calcula la tarifa de delivery según distancia en km */
 function calcDeliveryFee(distKm) {
@@ -10599,7 +10636,21 @@ function AdminPanel({ adminUser, onLogout }) {
   // Términos & condiciones
   const [terminosTxt, setTerminosTxt] = useStorage("admin_terminos", "Términos y condiciones de uso de CHANCE — Lotería Nacional de Beneficencia de Panamá.\n\n1. Aceptación de términos…\n2. Uso permitido…\n3. Privacidad…\n4. Limitación de responsabilidad…");
 
-  const updateCfg = (patch) => setAdminCfg({ ...adminCfg, ...patch });
+  const updateCfg = (patch) => {
+    const next = { ...adminCfg, ...patch };
+    setAdminCfg(next);
+    // ── PROPAGAR cambios al motor de cálculos ──────────────────────────────
+    // Sin esto, los cambios en comisiones/delivery se quedaban en storage
+    // pero NO afectaban los cálculos reales (calcOrderTotals, calcDeliveryFee).
+    applyAdminCfg(next);
+    // También sincronizamos con Firebase para que otros admins vean los
+    // cambios en tiempo real.
+    try { fbWrite("admin_cfg", next); } catch(e) { console.warn("FB cfg sync failed:", e); }
+  };
+
+  // Aplicar la config al motor cuando AdminPanel monta (y cuando cambia el storage).
+  // Sin esto, al refrescar la página los cálculos volverían a usar los defaults.
+  useEffect(() => { applyAdminCfg(adminCfg); }, [adminCfg]);
 
   return (
     <div style={{background:"var(--bg)",minHeight:"100vh",fontFamily:"'DM Sans',sans-serif"}}>
@@ -10921,6 +10972,14 @@ function AdminPanel({ adminUser, onLogout }) {
                 <>
                   <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:6}}>💰 COMISIONES</div>
                   <div style={{fontSize:11,color:"var(--muted)",marginBottom:14}}>Tarifas globales del motor de pagos</div>
+
+                  {/* Banner: explicación de cómo se aplican los cambios */}
+                  <div style={{background:"rgba(0,214,143,.06)",border:"1px solid rgba(0,214,143,.25)",borderRadius:10,padding:"9px 12px",marginBottom:12,display:"flex",gap:9,alignItems:"flex-start"}}>
+                    <span style={{fontSize:14}}>⚡</span>
+                    <div style={{fontSize:10,color:"var(--text)",lineHeight:1.5}}>
+                      <strong style={{color:"var(--green)"}}>Cambios en vivo:</strong> Las tarifas y comisiones que edites aquí se aplican inmediatamente a TODOS los pedidos NUEVOS en la app (compradores, vendedores y repartidores). Los pedidos ya creados conservan los valores con los que se calcularon.
+                    </div>
+                  </div>
 
                   <div className="admin-card" style={{marginBottom:10}}>
                     <div style={{fontSize:11,fontWeight:800,color:"var(--text)",marginBottom:10,letterSpacing:.5}}>Comisiones fijas</div>
@@ -11302,6 +11361,20 @@ export default function ChanceRoot() {
             }
           }
         } catch(e2) { /* silent */ }
+
+        // ── Cargar config global del admin desde Firebase ──────────────
+        // Cualquier usuario (cliente/vendedor/repartidor) lee la config
+        // para que sus cálculos usen las tarifas/comisiones actuales.
+        try {
+          const cfgFB = await fbRead("admin_cfg");
+          if (cfgFB && typeof cfgFB === "object") {
+            applyAdminCfg(cfgFB);
+          } else {
+            // Si no hay en Firebase, intentar leer del storage local
+            const cfgLocal = await window.storage.get("admin_cfg");
+            if (cfgLocal?.value) applyAdminCfg(JSON.parse(cfgLocal.value));
+          }
+        } catch(e3) { /* sin config remota, usa defaults hardcodeados */ }
       } catch(e) { console.warn("Error cargando datos:", e.message); }
       setStateLoaded(true);
     })();
@@ -11354,7 +11427,16 @@ export default function ChanceRoot() {
       } catch(e) { console.warn("Listener sorteoVendor:", e.message); }
     }, 3000);
 
-    return () => { stopPedidos(); stopBilletes(); stopChances(); stopSorteoVendor(); };
+    // 6. Listener para CONFIG GLOBAL del admin (comisiones, delivery, etc).
+    // Cuando el admin cambia algo, los cálculos en TODOS los dispositivos
+    // se actualizan inmediatamente sin necesidad de refresh.
+    const stopAdminCfg = fbListen("admin_cfg", (data) => {
+      try {
+        if (data && typeof data === "object") applyAdminCfg(data);
+      } catch(e) { console.warn("Listener admin_cfg:", e.message); }
+    }, 5000);
+
+    return () => { stopPedidos(); stopBilletes(); stopChances(); stopSorteoVendor(); stopAdminCfg(); };
   }, []);
 
   // Subir pedidos a Firebase cada vez que cambien (excepto cuando vinieron de Firebase)
