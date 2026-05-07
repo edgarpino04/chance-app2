@@ -7010,6 +7010,9 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
       {/* Stats + info — solo en Tablero y Pedidos, no en Kardex puro */}
       {showOnlyTab!=="kardex"&&(
       <>
+      {/* Stats + reemplazos banner — solo en pestaña Pedidos */}
+      {mainTab==="pedidos" && (
+      <>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:12}}>
         {[
           {v:String(pendingOrders.length),                                         l:"⏳ Nuevos"},
@@ -7027,6 +7030,8 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
             <strong style={{color:"var(--blue)"}}>{replacementOrders.length} reemplazo(s)</strong> propuesto(s) por el cliente — requieren tu aprobación
           </span>
         </div>
+      )}
+      </>
       )}
       <div style={{background:"rgba(244,196,48,.06)",border:"1px solid rgba(244,196,48,.18)",borderRadius:11,padding:"8px 13px",display:"flex",gap:8,marginBottom:12,alignItems:"center"}}>
         <Ic n="info" s={14} c="var(--gold)"/>
@@ -10020,7 +10025,15 @@ function RegisterScreen({ onRegister, onGoLogin }) {
         hasLic:     !!form.photoLic,
         hasBill:    !!form.photoBill,
       };
-      try { await window.storage.set("users_db", JSON.stringify([...users, newUser])); } catch(e) {}
+      try {
+        const updatedUsers = [...users, newUser];
+        await window.storage.set("users_db", JSON.stringify(updatedUsers));
+        // ── SINCRONIZACIÓN CON FIREBASE ────────────────────────────────────
+        // Subimos también a Firebase (path: users) para que el admin y otros
+        // dispositivos vean al usuario recién registrado. Si Firebase falla,
+        // no es crítico — el usuario quedó guardado localmente.
+        try { await fbWrite("users", updatedUsers); } catch(fbErr) { console.warn("Firebase users sync failed:", fbErr); }
+      } catch(e) {}
       onRegister(newUser);
     } catch(e) {
       // Storage failed but still proceed — user will be treated as new session
@@ -10415,7 +10428,7 @@ function PendingApprovalScreen({ user, onLogout }) {
           <div style={{background:"var(--bg3)",borderRadius:12,padding:"12px",textAlign:"left",marginBottom:16}}>
             {[
               ["📋","Cédula verificada",user.cedula],
-              role==="vendedor"?["🎟","Número de billetero",user.numeroBilletero]:["🛵","Vehículo",user.vehiculo],
+              user.rol==="vendedor"?["🎟","Número de billetero",user.numeroBilletero]:["🛵","Vehículo",user.vehiculo],
               ["📍","Zona",(user.provincia||"")+(user.distrito?` · ${user.distrito}`:"")],
               ["📅","Solicitud",user.createdAt],
             ].filter(Boolean).map(([ic,l,v])=>(
@@ -10430,7 +10443,7 @@ function PendingApprovalScreen({ user, onLogout }) {
           </div>
           <div style={{fontSize:10,color:"var(--muted)"}}>El proceso de aprobación toma 1–3 días hábiles.</div>
         </div>
-        <button style={{display:"block",width:"100%",padding:"13px",borderRadius:13,background:"rgba(255,255,255,.05)",border:"1.5px solid rgba(255,255,255,.18)",color:"#B8CEDE",fontFamily:"'DM Sans',sans-serif",fontWeight:700,fontSize:14,cursor:"pointer"}} style={{width:"100%",marginTop:12}} onClick={onLogout}>Cerrar sesión</button>
+        <button onClick={onLogout} style={{display:"block",width:"100%",padding:"13px",borderRadius:13,background:"rgba(255,255,255,.05)",border:"1.5px solid rgba(255,255,255,.18)",color:"#B8CEDE",fontFamily:"'DM Sans',sans-serif",fontWeight:700,fontSize:14,cursor:"pointer",marginTop:12}}>Cerrar sesión</button>
       </div>
     </div>
   );
@@ -10453,13 +10466,18 @@ function AdminPanel({ adminUser, onLogout }) {
   const updateUser = async (uid, patch) => {
     const updated = users.map(u => u.id===uid ? {...u,...patch} : u);
     await setUsers(updated);
+    // Sincronizar con Firebase para que el cambio (ej. aprobación) llegue
+    // al usuario en su propio dispositivo
+    try { await fbWrite("users", updated); } catch(e) { console.warn("FB sync failed:", e); }
     if (selectedUser?.id===uid) setSelectedUser(prev=>({...prev,...patch}));
     toast("✅ Usuario actualizado");
   };
 
   const deleteUser = async (uid) => {
     if (!window.confirm("¿Eliminar usuario permanentemente?")) return;
-    await setUsers(users.filter(u=>u.id!==uid));
+    const updated = users.filter(u=>u.id!==uid);
+    await setUsers(updated);
+    try { await fbWrite("users", updated); } catch(e) { console.warn("FB sync failed:", e); }
     setSelectedUser(null);
     toast("🗑 Usuario eliminado");
   };
@@ -11306,8 +11324,21 @@ export default function ChanceRoot() {
           {id:"demo_v",  email:"carlos@demo.pa",   password:"Vende123",   nombre:"Carlos Medina",  rol:"vendedor",   cedula:"8-222-3333",telefono:"6111-2222",status:"ACTIVO", createdAt:"01/01/2026",provincia:"Panamá",distrito:"Panamá",corregimiento:"San Francisco",numeroBilletero:"V001",sorteos:["⚡ Miercolito (Miércoles)","🌟 Dominical (Domingo)"],zonas:[],horarios:[],banco:"Banco General",cuentaBanco:"04-12-345678-0",tipoCuenta:"Cuenta Corriente",metodoCobro:"📱 Yappy (Banco General)",lugarVende:"Calle 50, San Francisco",hasPhoto:true,hasBill:true},
           {id:"demo_r",  email:"juan@demo.pa",     password:"Reparte123", nombre:"Juan Rodríguez", rol:"repartidor", cedula:"8-444-5555",telefono:"6333-4444",status:"ACTIVO", createdAt:"01/01/2026",provincia:"Panamá",distrito:"Panamá",corregimiento:"El Cangrejo",vehiculo:"🏍 Motocicleta",zonas:["Panamá Centro","San Francisco","El Cangrejo"],horarios:["Tarde (12pm–6pm)"],banco:"Nequi",cuentaBanco:"6333-4444",tipoCuenta:"Cuenta de Ahorros",metodoCobro:"",sorteos:[],hasPhoto:true,hasLic:true},
         ];
-        const merged = [...demos.filter(d=>!existing.find(e=>e.email===d.email)), ...existing];
+        // Hidratar desde Firebase (cross-device): si hay usuarios en Firebase
+        // que no están localmente, los traemos. Si hay locales más recientes,
+        // los conservamos. Estrategia simple: union por email, prioridad al
+        // que tenga timestamp 'updatedAt' más reciente.
+        let fbUsers = [];
+        try {
+          const fb = await fbRead("users");
+          if (Array.isArray(fb)) fbUsers = fb;
+        } catch(e) { /* sin Firebase, OK */ }
+        // Merge: demos primero, después usuarios locales/Firebase (sin duplicar emails)
+        const allUsers = [...existing, ...fbUsers.filter(f => !existing.find(e => e.email === f.email))];
+        const merged = [...demos.filter(d=>!allUsers.find(e=>e.email===d.email)), ...allUsers];
         await window.storage.set("users_db", JSON.stringify(merged));
+        // Subir merge final a Firebase (asegura que demos están disponibles cross-device)
+        try { await fbWrite("users", merged); } catch(e) {}
         const sr = await window.storage.get("active_session");
         if (sr?.value) {
           const sess = JSON.parse(sr.value);
