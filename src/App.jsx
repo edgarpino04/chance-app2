@@ -9954,6 +9954,55 @@ function RegisterScreen({ onRegister, onGoLogin }) {
   const set = (k,v) => setForm(p=>({...p,[k]:v}));
   const toggleArr = (k,v) => setForm(p=>({...p,[k]:p[k].includes(v)?p[k].filter(x=>x!==v):[...p[k],v]}));
 
+  /**
+   * Convierte un File de imagen a una data URL comprimida (max ~600KB).
+   * Mantiene la calidad razonable para que el admin pueda validar la cédula.
+   * Para PDFs u otros tipos, devuelve la data URL sin compresión.
+   */
+  const fileToCompressedDataURL = (file) => new Promise((resolve, reject) => {
+    if (!file) { resolve(null); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      // Si NO es imagen (ej. PDF), guardar tal cual
+      if (!file.type.startsWith("image/")) { resolve(dataUrl); return; }
+      // Comprimir imagen: redimensionar y bajar calidad JPEG
+      const img = new Image();
+      img.onerror = () => resolve(dataUrl); // si falla, dejar original
+      img.onload = () => {
+        const MAX_DIM = 1280; // ancho/alto máximo
+        let { width, height } = img;
+        if (width > MAX_DIM || height > MAX_DIM) {
+          const ratio = Math.min(MAX_DIM/width, MAX_DIM/height);
+          width  = Math.round(width  * ratio);
+          height = Math.round(height * ratio);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        // JPEG calidad 0.75 para reducir tamaño manteniendo legibilidad
+        resolve(canvas.toDataURL("image/jpeg", 0.75));
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  /** Handler unificado para inputs file de fotos/documentos */
+  const handlePhotoUpload = async (key, e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const dataUrl = await fileToCompressedDataURL(file);
+      set(key, dataUrl);
+    } catch(err) {
+      console.warn("Error procesando archivo:", err);
+      setErr("No se pudo procesar el archivo. Intenta otro.");
+    }
+  };
+
   const STEPS_PER_ROLE = {
     cliente:     2,
     vendedor:    4,
@@ -10024,6 +10073,11 @@ function RegisterScreen({ onRegister, onGoLogin }) {
         hasPhoto:   !!form.photoId,
         hasLic:     !!form.photoLic,
         hasBill:    !!form.photoBill,
+        // Guardar las imágenes (data URLs comprimidas) para que el admin
+        // pueda visualizarlas y validar antes de aprobar al usuario.
+        photoIdData:   form.photoId   || null,
+        photoBillData: form.photoBill || null,
+        photoLicData:  form.photoLic  || null,
       };
       try {
         const updatedUsers = [...users, newUser];
@@ -10346,7 +10400,7 @@ function RegisterScreen({ onRegister, onGoLogin }) {
             {/* Foto Cédula */}
             <label style={{display:"block",fontSize:11,fontWeight:800,color:"#9CB8D4",letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Cédula de identidad (foto) *</label>
             <div style={{width:"100%",padding:"20px",border:"2px dashed rgba(255,255,255,.2)",borderRadius:12,textAlign:"center",cursor:"pointer",background:"rgba(255,255,255,.04)"}} style={{marginBottom:12,borderColor:form.photoId?"var(--green)":"var(--border)"}}>
-              <input type="file" accept="image/*" style={{display:"none"}} id="photoId" onChange={e=>set("photoId",e.target.files[0]?.name||"uploaded")}/>
+              <input type="file" accept="image/*" style={{display:"none"}} id="photoId" onChange={e=>handlePhotoUpload("photoId",e)}/>
               <label htmlFor="photoId" style={{cursor:"pointer",display:"block"}}>
                 {form.photoId
                   ? <div><div style={{fontSize:28,marginBottom:4}}>✅</div><div style={{fontSize:12,color:"var(--green)",fontWeight:700}}>Cédula cargada</div></div>
@@ -10359,7 +10413,7 @@ function RegisterScreen({ onRegister, onGoLogin }) {
               <>
                 <label style={{display:"block",fontSize:11,fontWeight:800,color:"#9CB8D4",letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Comprobante de billetero / devolución LNB</label>
                 <div style={{width:"100%",padding:"20px",border:"2px dashed rgba(255,255,255,.2)",borderRadius:12,textAlign:"center",cursor:"pointer",background:"rgba(255,255,255,.04)"}} style={{marginBottom:12,borderColor:form.photoBill?"var(--green)":"var(--border)"}}>
-                  <input type="file" accept="image/*,application/pdf" style={{display:"none"}} id="photoBill" onChange={e=>set("photoBill",e.target.files[0]?.name||"uploaded")}/>
+                  <input type="file" accept="image/*,application/pdf" style={{display:"none"}} id="photoBill" onChange={e=>handlePhotoUpload("photoBill",e)}/>
                   <label htmlFor="photoBill" style={{cursor:"pointer",display:"block"}}>
                     {form.photoBill
                       ? <div><div style={{fontSize:28,marginBottom:4}}>✅</div><div style={{fontSize:12,color:"var(--green)",fontWeight:700}}>Comprobante cargado</div></div>
@@ -10374,7 +10428,7 @@ function RegisterScreen({ onRegister, onGoLogin }) {
               <>
                 <label style={{display:"block",fontSize:11,fontWeight:800,color:"#9CB8D4",letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Foto de licencia de conducir (si aplica)</label>
                 <div style={{width:"100%",padding:"20px",border:"2px dashed rgba(255,255,255,.2)",borderRadius:12,textAlign:"center",cursor:"pointer",background:"rgba(255,255,255,.04)"}} style={{marginBottom:12,borderColor:form.photoLic?"var(--green)":"var(--border)"}}>
-                  <input type="file" accept="image/*" style={{display:"none"}} id="photoLic" onChange={e=>set("photoLic",e.target.files[0]?.name||"uploaded")}/>
+                  <input type="file" accept="image/*" style={{display:"none"}} id="photoLic" onChange={e=>handlePhotoUpload("photoLic",e)}/>
                   <label htmlFor="photoLic" style={{cursor:"pointer",display:"block"}}>
                     {form.photoLic
                       ? <div><div style={{fontSize:28,marginBottom:4}}>✅</div><div style={{fontSize:12,color:"var(--green)",fontWeight:700}}>Licencia cargada</div></div>
@@ -10722,6 +10776,53 @@ function AdminPanel({ adminUser, onLogout }) {
                         </div>
                       ))}
                     </div>
+
+                    {/* ── Visor de documentos adjuntos para validación ── */}
+                    {(u.photoIdData || u.photoBillData || u.photoLicData) && (
+                      <div style={{width:"100%"}}>
+                        <div style={{fontSize:10,color:"var(--muted)",fontWeight:700,marginBottom:6,letterSpacing:.5,textTransform:"uppercase"}}>
+                          📎 Documentos adjuntos · Tap para ampliar
+                        </div>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                          {u.photoIdData && (
+                            <a href={u.photoIdData} target="_blank" rel="noopener" style={{textDecoration:"none",display:"block"}}>
+                              <div style={{borderRadius:9,overflow:"hidden",border:"1.5px solid rgba(0,214,143,.35)",background:"var(--bg3)"}}>
+                                {u.photoIdData.startsWith("data:image/") ? (
+                                  <img src={u.photoIdData} alt="Cédula" style={{width:"100%",height:90,objectFit:"cover",display:"block"}}/>
+                                ) : (
+                                  <div style={{height:90,display:"flex",alignItems:"center",justifyContent:"center",fontSize:32}}>📄</div>
+                                )}
+                                <div style={{fontSize:9,color:"var(--green)",fontWeight:800,padding:"5px 7px",textAlign:"center"}}>📋 Cédula</div>
+                              </div>
+                            </a>
+                          )}
+                          {u.photoBillData && (
+                            <a href={u.photoBillData} target="_blank" rel="noopener" style={{textDecoration:"none",display:"block"}}>
+                              <div style={{borderRadius:9,overflow:"hidden",border:"1.5px solid rgba(244,196,48,.35)",background:"var(--bg3)"}}>
+                                {u.photoBillData.startsWith("data:image/") ? (
+                                  <img src={u.photoBillData} alt="Billetero" style={{width:"100%",height:90,objectFit:"cover",display:"block"}}/>
+                                ) : (
+                                  <div style={{height:90,display:"flex",alignItems:"center",justifyContent:"center",fontSize:32}}>📄</div>
+                                )}
+                                <div style={{fontSize:9,color:"var(--gold)",fontWeight:800,padding:"5px 7px",textAlign:"center"}}>🎟 Billetero LNB</div>
+                              </div>
+                            </a>
+                          )}
+                          {u.photoLicData && (
+                            <a href={u.photoLicData} target="_blank" rel="noopener" style={{textDecoration:"none",display:"block"}}>
+                              <div style={{borderRadius:9,overflow:"hidden",border:"1.5px solid rgba(59,158,255,.35)",background:"var(--bg3)"}}>
+                                {u.photoLicData.startsWith("data:image/") ? (
+                                  <img src={u.photoLicData} alt="Licencia" style={{width:"100%",height:90,objectFit:"cover",display:"block"}}/>
+                                ) : (
+                                  <div style={{height:90,display:"flex",alignItems:"center",justifyContent:"center",fontSize:32}}>📄</div>
+                                )}
+                                <div style={{fontSize:9,color:"var(--blue)",fontWeight:800,padding:"5px 7px",textAlign:"center"}}>🚗 Licencia</div>
+                              </div>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     <div style={{display:"flex",gap:7,width:"100%"}}>
                       <button onClick={()=>updateUser(u.id,{status:"SUSPENDIDO"})}
