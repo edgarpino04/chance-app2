@@ -6515,6 +6515,13 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
   const [editingOrder, setEditingOrder] = useState(null);  // orderId siendo editado
   const [editedItems,  setEditedItems]  = useState([]);    // items editados
 
+  // ── SORTEO ACTIVO DEL VENDEDOR ────────────────────────────────────────────
+  // (Se declara temprano porque handleAdd y los filtros del tablero lo necesitan)
+  const SORTEOS_VENDEDOR = SORTEOS_RECIENTES.filter(s=>["MIERCOLITO","DOMINICAL","GORDITO","EXTRAORDINARIA"].includes(s.tipo));
+  const [localSorteo, setLocalSorteo] = useState(SORTEOS_VENDEDOR[0]);
+  const activeSorteo    = propActiveSorteo    || localSorteo;
+  const setActiveSorteo = propSetActiveSorteo || setLocalSorteo;
+
   // ─── TRACKING GPS DEL VENDEDOR ───
   // El vendedor envía su ubicación a Firebase mientras está activo
   // Se usa para que el repartidor sepa dónde recoger los billetes
@@ -6621,12 +6628,6 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
   const replacementOrders = orders.filter(o=>o.status==="REEMPLAZO").sort(sortNew);
   const approvedOrders    = orders.filter(o=>o.status==="APROBADO").sort(sortNew);
   const allVOrders        = orders.filter(o=>["PENDIENTE","REEMPLAZO","MODIFICADO","APROBADO","EN_CAMINO","ENTREGADO","CANCELADO"].includes(o.status)).sort(sortNew);
-
-  // ── SORTEO ACTIVO DEL VENDEDOR ────────────────────────────────────────────
-  const SORTEOS_VENDEDOR = SORTEOS_RECIENTES.filter(s=>["MIERCOLITO","DOMINICAL","GORDITO","EXTRAORDINARIA"].includes(s.tipo));
-  const [localSorteo, setLocalSorteo] = useState(SORTEOS_VENDEDOR[0]);
-  const activeSorteo    = propActiveSorteo    || localSorteo;
-  const setActiveSorteo = propSetActiveSorteo || setLocalSorteo;
 
   // ── SISTEMA DE PLANTILLAS POR SORTEO (Persistent Storage) ────────────────
   // Clave: "plantilla_V001_MIERCOLITO" → {billetes:[...], chances:[...], savedAt:"..."}
