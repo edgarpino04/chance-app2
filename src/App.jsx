@@ -1599,7 +1599,13 @@ function TableroScreen({ vendor, cart, setCart, nav }) {
   };
 
   const getCartQty = (type,n) => cart.find(i=>i.id===`${vendor.id}-${type}-${n}`)?.qty||0;
-  const items = tab==="billetes"?vendor.billetes:vendor.chances;
+  // Filtrar por sorteo activo del vendedor: solo se muestran al comprador los
+  // billetes/chances asociados al mismo sorteo. Items legacy sin sorteoTipo
+  // se consideran disponibles para cualquier sorteo (compatibilidad).
+  const sorteoTipoActivoVendor = vendor.sorteoData?.tipo || "MIERCOLITO";
+  const billetesFiltrados = (vendor.billetes||[]).filter(b => !b.sorteoTipo || b.sorteoTipo === sorteoTipoActivoVendor);
+  const chancesFiltrados  = (vendor.chances ||[]).filter(c => !c.sorteoTipo || c.sorteoTipo === sorteoTipoActivoVendor);
+  const items = tab==="billetes"?billetesFiltrados:chancesFiltrados;
   const isChanceTab = tab==="chances";
 
   return (
@@ -1643,8 +1649,8 @@ function TableroScreen({ vendor, cart, setCart, nav }) {
       {/* Pestañas producto */}
       <div style={{display:"flex",gap:7,marginBottom:12}}>
         {[
-          {id:"billetes",icon:"🎟️",label:"Billetes",sub:"4 cifras · $1.00",color:"var(--gold)",count:vendor.billetes.filter(b=>getAvail(b)>0).length},
-          {id:"chances", icon:"⚡",label:"Chances", sub:"2 cifras · $0.25",color:"var(--blue)",count:vendor.chances.filter(c=>getAvail(c)>0).length},
+          {id:"billetes",icon:"🎟️",label:"Billetes",sub:"4 cifras · $1.00",color:"var(--gold)",count:billetesFiltrados.filter(b=>getAvail(b)>0).length},
+          {id:"chances", icon:"⚡",label:"Chances", sub:"2 cifras · $0.25",color:"var(--blue)",count:chancesFiltrados.filter(c=>getAvail(c)>0).length},
         ].map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)} style={{flex:1,padding:"10px 8px",borderRadius:14,border:`2px solid ${tab===t.id?t.color:"var(--border)"}`,background:tab===t.id?`${t.color}12`:"var(--bg2)",cursor:"pointer",textAlign:"center",fontFamily:"'DM Sans'",transition:"all .2s"}}>
             <div style={{fontSize:13,fontWeight:800,color:tab===t.id?t.color:"var(--muted)"}}>{t.icon} {t.label}</div>
@@ -6520,16 +6526,73 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
   const handleAdd = () => {
     if (!newNum.trim()) return;
     const n = newNum.trim().padStart(addType==="billete"?4:2,"0");
+    // Asociamos cada billete/chance al sorteo activo del vendedor para que
+    // el comprador SOLO vea los billetes correspondientes al sorteo seleccionado.
+    const sorteoMeta = {
+      sorteoTipo: activeSorteo?.tipo || "MIERCOLITO",
+      sorteoN:    activeSorteo?.sorteoN || "",
+    };
     if (addType==="billete") {
-      if (!billetes.find(b=>b.n===n)) setBilletes&&setBilletes(p=>[...p,{n,stock:newStock,sold:0}]);
+      // Permitir mismo número en sorteos diferentes (Miércoles 0099 ≠ Domingo 0099)
+      const yaExiste = billetes.find(b=>b.n===n && b.sorteoTipo===sorteoMeta.sorteoTipo);
+      if (!yaExiste) setBilletes&&setBilletes(p=>[...p,{n,stock:newStock,sold:0,...sorteoMeta}]);
     } else {
-      if (!chances.find(c=>c.n===n)) setChances&&setChances(p=>[...p,{n,stock:newStock,sold:0}]);
+      const yaExiste = chances.find(c=>c.n===n && c.sorteoTipo===sorteoMeta.sorteoTipo);
+      if (!yaExiste) setChances&&setChances(p=>[...p,{n,stock:newStock,sold:0,...sorteoMeta}]);
     }
     setNewNum(""); setNewStock(1);
     setAddSuccess(true); setTimeout(()=>{setAddSuccess(false);setShowAdd(false);},1600);
   };
 
-  const allItems = prodTab==="billetes"?billetes:chances;
+  // ─── Filtrar billetes/chances por sorteo activo ───
+  // Backward-compat: items sin sorteoTipo se consideran del sorteo activo (legacy seed).
+  const sorteoActivoTipo = activeSorteo?.tipo || "MIERCOLITO";
+  const billetesDelSorteo = (billetes||[]).filter(b => !b.sorteoTipo || b.sorteoTipo === sorteoActivoTipo);
+  const chancesDelSorteo  = (chances ||[]).filter(c => !c.sorteoTipo || c.sorteoTipo === sorteoActivoTipo);
+
+  // ── EDICIÓN INLINE DE ITEMS DEL TABLERO ───────────────────────────────────
+  // Cuando el vendedor toca un billete/chance, se abre un panel para
+  // aumentar stock, reducir stock o eliminar. Sincroniza con Kardex automático.
+  const [selectedItem, setSelectedItem] = useState(null); // {n, isChance}
+  const [editStock,    setEditStock]    = useState(0);
+
+  const openItemEditor = (item, chanceFlag) => {
+    setSelectedItem({ n: item.n, isChance: chanceFlag, sorteoTipo: item.sorteoTipo || sorteoActivoTipo });
+    setEditStock(item.stock);
+  };
+  const closeItemEditor = () => { setSelectedItem(null); setEditStock(0); };
+
+  /** Aumenta el stock del item seleccionado en delta unidades */
+  const adjustStock = (delta) => {
+    if (!selectedItem) return;
+    const { n, isChance: ic, sorteoTipo: st } = selectedItem;
+    const updater = arr => arr.map(item => {
+      const matches = item.n === n && (!item.sorteoTipo || item.sorteoTipo === st);
+      if (!matches) return item;
+      const newStock = Math.max(item.sold, item.stock + delta); // no menor a lo ya vendido
+      return { ...item, stock: newStock };
+    });
+    if (ic) setChances && setChances(updater);
+    else    setBilletes && setBilletes(updater);
+    setEditStock(s => Math.max(0, s + delta));
+  };
+
+  /** Elimina por completo el item del tablero (solo si no se ha vendido nada) */
+  const removeItem = () => {
+    if (!selectedItem) return;
+    const { n, isChance: ic, sorteoTipo: st } = selectedItem;
+    const filtrar = arr => arr.filter(item => {
+      const matches = item.n === n && (!item.sorteoTipo || item.sorteoTipo === st);
+      if (!matches) return true;            // mantener
+      if (item.sold > 0) return true;        // no eliminar si ya hay ventas
+      return false;                           // eliminar
+    });
+    if (ic) setChances && setChances(filtrar);
+    else    setBilletes && setBilletes(filtrar);
+    closeItemEditor();
+  };
+
+  const allItems = prodTab==="billetes"?billetesDelSorteo:chancesDelSorteo;
   const isChance = prodTab==="chances";
 
   // Pedidos reales del estado compartido (ordenados del más nuevo al más antiguo)
@@ -6962,7 +7025,9 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
           {allItems.map(item=>{
             const av=item.stock-item.sold;
             return (
-              <div key={item.n} style={{borderRadius:11,padding:"9px 4px",background:av===0?"rgba(110,133,158,.05)":`${isChance?"rgba(59,158,255,.08)":"rgba(244,196,48,.08)"}`,border:`1.5px solid ${av===0?"rgba(110,133,158,.12)":isChance?"rgba(59,158,255,.26)":"rgba(244,196,48,.26)"}`,textAlign:"center",opacity:av===0?.38:1}}>
+              <div key={item.n}
+                onClick={()=>openItemEditor(item, isChance)}
+                style={{borderRadius:11,padding:"9px 4px",background:av===0?"rgba(110,133,158,.05)":`${isChance?"rgba(59,158,255,.08)":"rgba(244,196,48,.08)"}`,border:`1.5px solid ${av===0?"rgba(110,133,158,.12)":isChance?"rgba(59,158,255,.26)":"rgba(244,196,48,.26)"}`,textAlign:"center",opacity:av===0?.38:1,cursor:"pointer"}}>
                 <div style={{fontSize:8,color:isChance?"var(--blue)":"var(--gold)",fontWeight:800}}>{isChance?"⚡":"🎟"}</div>
                 <div style={{fontFamily:"'Bebas Neue'",fontSize:isChance?19:16,color:"var(--text)",letterSpacing:1,lineHeight:1,marginTop:1}}>{item.n}</div>
                 <div style={{fontSize:8,color:av===0?"var(--red)":isChance?"var(--blue)":"var(--green)",fontWeight:800,marginTop:2}}>
@@ -6989,7 +7054,9 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
             const av=item.stock-item.sold;
             const pct=item.stock>0?(av/item.stock)*100:0;
             return (
-              <div key={item.n} style={{display:"grid",gridTemplateColumns:"1.8fr 1fr 1fr 1.6fr",gap:6,alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+              <div key={item.n}
+                onClick={()=>openItemEditor(item, isChance)}
+                style={{display:"grid",gridTemplateColumns:"1.8fr 1fr 1fr 1.6fr",gap:6,alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)",cursor:"pointer"}}>
                 <div style={{fontFamily:"'Bebas Neue'",fontSize:16,color:isChance?"var(--blue)":"var(--gold)",letterSpacing:1}}>
                   {isChance?"⚡":"🎟"} {item.n}
                 </div>
@@ -7212,6 +7279,93 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
           })}
         </div>
       )}
+
+      {/* ═══ MODAL EDITAR ITEM (eliminar / aumentar / reducir stock) ═══ */}
+      {selectedItem && (() => {
+        const arr = selectedItem.isChance ? chancesDelSorteo : billetesDelSorteo;
+        const item = arr.find(x => x.n === selectedItem.n);
+        if (!item) { closeItemEditor(); return null; }
+        const av = item.stock - item.sold;
+        const cnf = selectedItem.isChance
+          ? { c:"var(--blue)",  bg:"rgba(59,158,255,.10)",  border:"rgba(59,158,255,.28)", icon:"⚡", price:0.25, label:"Chance" }
+          : { c:"var(--gold)",  bg:"rgba(244,196,48,.10)",  border:"rgba(244,196,48,.28)", icon:"🎟", price:1.00, label:"Billete" };
+        return (
+          <div className="modal-bg" onClick={closeItemEditor}>
+            <div className="modal pop" onClick={e=>e.stopPropagation()}>
+              <div className="row" style={{justifyContent:"space-between",marginBottom:10}}>
+                <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:cnf.c,letterSpacing:2}}>EDITAR {cnf.label.toUpperCase()}</div>
+                <button onClick={closeItemEditor} style={{background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:9,width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
+                  <Ic n="close" s={14} c="var(--muted)"/>
+                </button>
+              </div>
+
+              {/* Info del item */}
+              <div style={{background:cnf.bg,border:`1.5px solid ${cnf.border}`,borderRadius:13,padding:"14px 16px",marginBottom:14,textAlign:"center"}}>
+                <div style={{fontSize:32,marginBottom:4}}>{cnf.icon}</div>
+                <div style={{fontFamily:"'Bebas Neue'",fontSize:38,color:cnf.c,letterSpacing:3,lineHeight:1}}>{item.n}</div>
+                <div style={{fontSize:10,color:"var(--muted)",marginTop:4,fontWeight:700}}>
+                  {sorteoActivoTipo} · ${cnf.price.toFixed(2)} c/u
+                </div>
+              </div>
+
+              {/* Estado actual */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:7,marginBottom:14}}>
+                <div style={{background:"var(--bg3)",borderRadius:9,padding:"8px 4px",textAlign:"center"}}>
+                  <div style={{fontSize:9,color:"var(--muted)",fontWeight:700}}>Stock</div>
+                  <div style={{fontSize:18,fontWeight:800,color:"var(--text)",fontFamily:"'Bebas Neue'",letterSpacing:1}}>{item.stock}</div>
+                </div>
+                <div style={{background:"var(--bg3)",borderRadius:9,padding:"8px 4px",textAlign:"center"}}>
+                  <div style={{fontSize:9,color:"var(--muted)",fontWeight:700}}>Vendidos</div>
+                  <div style={{fontSize:18,fontWeight:800,color:item.sold>0?"var(--red)":"var(--muted)",fontFamily:"'Bebas Neue'",letterSpacing:1}}>{item.sold}</div>
+                </div>
+                <div style={{background:"var(--bg3)",borderRadius:9,padding:"8px 4px",textAlign:"center"}}>
+                  <div style={{fontSize:9,color:"var(--muted)",fontWeight:700}}>Disponible</div>
+                  <div style={{fontSize:18,fontWeight:800,color:av===0?"var(--red)":"var(--green)",fontFamily:"'Bebas Neue'",letterSpacing:1}}>{av}</div>
+                </div>
+              </div>
+
+              {/* Botones aumentar/reducir */}
+              <div className="sec">Ajustar stock</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <button onClick={()=>adjustStock(-1)}
+                  disabled={item.stock <= item.sold}
+                  style={{padding:"12px",background:item.stock<=item.sold?"var(--bg3)":"rgba(255,75,110,.1)",border:`1.5px solid ${item.stock<=item.sold?"var(--border)":"rgba(255,75,110,.3)"}`,borderRadius:11,color:item.stock<=item.sold?"var(--muted)":"var(--red)",fontSize:13,fontWeight:800,cursor:item.stock<=item.sold?"not-allowed":"pointer",fontFamily:"'DM Sans'"}}>
+                  ➖ Reducir 1
+                </button>
+                <button onClick={()=>adjustStock(1)}
+                  style={{padding:"12px",background:`${cnf.c}1A`,border:`1.5px solid ${cnf.c}50`,borderRadius:11,color:cnf.c,fontSize:13,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                  ➕ Aumentar 1
+                </button>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+                <button onClick={()=>adjustStock(-5)}
+                  disabled={item.stock - 5 < item.sold}
+                  style={{padding:"10px",background:(item.stock-5<item.sold)?"var(--bg3)":"rgba(255,75,110,.07)",border:`1px solid ${(item.stock-5<item.sold)?"var(--border)":"rgba(255,75,110,.2)"}`,borderRadius:10,color:(item.stock-5<item.sold)?"var(--muted)":"var(--red)",fontSize:11,fontWeight:700,cursor:(item.stock-5<item.sold)?"not-allowed":"pointer",fontFamily:"'DM Sans'"}}>
+                  ➖ Reducir 5
+                </button>
+                <button onClick={()=>adjustStock(5)}
+                  style={{padding:"10px",background:`${cnf.c}10`,border:`1px solid ${cnf.c}30`,borderRadius:10,color:cnf.c,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                  ➕ Aumentar 5
+                </button>
+              </div>
+
+              {/* Eliminar */}
+              <div className="sec">Eliminar del tablero</div>
+              {item.sold > 0 ? (
+                <div style={{background:"rgba(255,204,51,.06)",border:"1px solid rgba(255,204,51,.2)",borderRadius:10,padding:"10px 13px",fontSize:11,color:"var(--gold)",marginBottom:6}}>
+                  ⚠️ No se puede eliminar — ya hay {item.sold} venta{item.sold!==1?"s":""}.
+                  Reduce el stock al máximo posible (hasta {item.sold}).
+                </div>
+              ) : (
+                <button onClick={removeItem}
+                  style={{width:"100%",padding:"12px",background:"rgba(255,75,110,.12)",border:"1.5px solid rgba(255,75,110,.4)",borderRadius:11,color:"var(--red)",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                  🗑️ Eliminar {cnf.label} {item.n}
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ═══ MODAL AÑADIR ═══ */}
       {showAdd&&(
@@ -7643,7 +7797,7 @@ function BatchTripCard({ batch, onAccept, onDecline, isActive }) {
 /* ═══════════════════════════════════════════════════════
    MÓDULO REPARTIDOR — con Motor de Pagos integrado
 ═══════════════════════════════════════════════════════ */
-function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
+function RepartidorHome({ orders=[], onAssign, onDeliver, onStartPickup, initTab="inicio" }) {
   const [rTab, setRTab] = useState(initTab);
   const [batchAccepted, setBatchAccepted] = useState(false);
 
@@ -7897,7 +8051,7 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
                   <span style={{fontSize:10,color:"var(--muted)",fontWeight:700}}>{o.id}</span>
                   {itemList.length>1&&<span style={{marginLeft:7,fontSize:9,fontWeight:800,color:"var(--blue)",background:"rgba(59,158,255,.1)",borderRadius:7,padding:"2px 6px"}}>{itemList.length} items</span>}
                 </div>
-                <span className={`badge ${isDelivered?"bg":isInTransit?"bb":isApproved?"by":"br"}`}>{isDelivered?"📦 Entregado":isInTransit?"🛵 En Camino":isApproved?"📦 Recoger":"⏳ Pendiente vendedor"}</span>
+                <span className={`badge ${isDelivered?"bg":isInTransit?"bb":isApproved?(o.pickupStarted?"bb":"by"):"br"}`}>{isDelivered?"📦 Entregado":isInTransit?"🛵 En Camino":isApproved?(o.pickupStarted?"🛵 Asignado a mí":"📦 Recoger"):"⏳ Pendiente vendedor"}</span>
               </div>
 
               {/* Indicador de fase: Pickup → Dropoff (timeline horizontal) */}
@@ -8030,7 +8184,15 @@ function RepartidorHome({ orders=[], onAssign, onDeliver, initTab="inicio" }) {
                       style={{padding:"7px 13px",background:"rgba(244,196,48,.12)",border:"1px solid rgba(244,196,48,.3)",borderRadius:9,color:"var(--gold)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'",display:"flex",alignItems:"center",gap:5}}>
                       🗺️ Cómo llegar al vendedor
                     </button>
-                    {onAssign && (
+                    {/* PASO 1A — Iniciar recogida (asignarse a sí mismo el pedido) */}
+                    {!o.pickupStarted && onStartPickup && (
+                      <button onClick={()=>onStartPickup(o.id)}
+                        style={{padding:"7px 13px",background:"linear-gradient(135deg,#3B9EFF,#2585E5)",border:"none",borderRadius:9,color:"#fff",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                        🛵 Iniciar recogida
+                      </button>
+                    )}
+                    {/* PASO 1B — Confirmar recogida (solo aparece después de iniciar) */}
+                    {o.pickupStarted && onAssign && (
                       <button onClick={async ()=>{
                         // Capturar ubicación inicial antes de marcar EN_CAMINO
                         try {
@@ -8908,6 +9070,25 @@ function App({ forceRole=null, authUser=null, onLogout=null,
     notifySound("approve");
     setSharedOrders(p=>p.map(o=>o.id!==id?o:{...o,status:"APROBADO",approvedAt:ts(),history:[...(o.history||[]),{by:"vendedor",action:"Aprobó pedido",at:ts()}]}));
   };
+
+  /**
+   * El repartidor "se asigna" el pedido sin cambiar de estado todavía.
+   * Marca el order con pickupStarted:true y un timestamp. El order sigue en APROBADO,
+   * pero el botón "Iniciar recogida" se reemplaza por "Recogí el pedido".
+   * En producción aquí también se reservaría el pedido para este repartidor específico,
+   * impidiendo que otros lo tomen.
+   */
+  const startPickupOrder = id => setSharedOrders(p=>p.map(o=>{
+    if (o.id !== id || o.status !== "APROBADO") return o;
+    return {
+      ...o,
+      pickupStarted: true,
+      pickupStartedAt: ts(),
+      pickupStartedAtMs: Date.now(),
+      assignedRepartidorId: "repartidor_juan", // demo-fixed; en prod sale del usuario actual
+      history: [...(o.history||[]), { by: "repartidor", action: "Inició recogida — en camino al vendedor", at: ts() }],
+    };
+  }));
   const assignOrder  = id => setSharedOrders(p=>p.map(o=>{
     if (o.id !== id) return o;
     // VALIDACIÓN: solo permitir pasar a EN_CAMINO si el vendedor ya APROBÓ
@@ -9135,26 +9316,26 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       case "perfil_v":     return <PerfilScreen authUser={authUser} onLogout={onLogout} currentRole={role} onSwitchRole={switchRole}/>;
       // ── REPARTIDOR
       case "home_repartidor": return <RepartidorHome
-        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} initTab="inicio"/>;
+        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
       case "entregas_r":   return <RepartidorHome
-        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} initTab="inicio"/>;
+        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
       case "batch_r":      return <RepartidorHome
-        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} initTab="batch"/>;
+        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="batch"/>;
       case "billetera_r":  return <RepartidorHome
-        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} initTab="liquidacion"/>;
+        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="liquidacion"/>;
       case "perfil_v":     return <PerfilScreen authUser={authUser} onLogout={onLogout} currentRole={role} onSwitchRole={switchRole}/>;
       // ── REPARTIDOR
       case "home_repartidor": return <RepartidorHome
-        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} initTab="inicio"/>;
+        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
       case "entregas_r":   return <RepartidorHome
-        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} initTab="inicio"/>;
+        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
       case "batch_r":      return <RepartidorHome
-        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} initTab="batch"/>;
+        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="batch"/>;
       case "billetera_r":  return <RepartidorHome
-        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} initTab="liquidacion"/>;
+        orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="liquidacion"/>;
       default:
         if (role==="vendedor")   return <VendedorHome   billetes={sharedBilletes} setBilletes={setSharedBilletes} chances={sharedChances} setChances={setSharedChances} orders={sharedOrders} onApprove={approveOrder} onModify={modifyOrderWithSound} onApproveReplacement={vendorApproveReplacementWithSound} onRejectReplacement={vendorRejectReplacementWithSound} onCancelByVendor={vendorCancelOrder} activeSorteo={vendorActiveSorteo} setActiveSorteo={setVendorActiveSorteo} initTab="tablero"/>;
-        if (role==="repartidor") return <RepartidorHome orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} initTab="inicio"/>;
+        if (role==="repartidor") return <RepartidorHome orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
         return <ClienteHome cart={cart} nav={nav} sharedVendor={sharedVendor} activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
     }
   };
