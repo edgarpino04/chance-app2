@@ -6592,6 +6592,18 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
     closeItemEditor();
   };
 
+  // Si el item seleccionado ya no existe (eliminado externamente o cambio de sorteo),
+  // cerrar el modal limpiamente. Lo hacemos en un effect para no llamar setState durante render.
+  useEffect(() => {
+    if (!selectedItem) return;
+    const arr = selectedItem.isChance ? (chances || []) : (billetes || []);
+    const stillExists = arr.find(x =>
+      x.n === selectedItem.n &&
+      (!x.sorteoTipo || x.sorteoTipo === selectedItem.sorteoTipo)
+    );
+    if (!stillExists) closeItemEditor();
+  }, [selectedItem, billetes, chances]);
+
   const allItems = prodTab==="billetes"?billetesDelSorteo:chancesDelSorteo;
   const isChance = prodTab==="chances";
 
@@ -7284,7 +7296,9 @@ function VendedorHome({ billetes=VENDORS[0].billetes, setBilletes, chances=VENDO
       {selectedItem && (() => {
         const arr = selectedItem.isChance ? chancesDelSorteo : billetesDelSorteo;
         const item = arr.find(x => x.n === selectedItem.n);
-        if (!item) { closeItemEditor(); return null; }
+        // Si el item ya no existe (puede haberse eliminado), no renderizamos nada.
+        // El useEffect de arriba se encarga de limpiar el estado en el siguiente tick.
+        if (!item) return null;
         const av = item.stock - item.sold;
         const cnf = selectedItem.isChance
           ? { c:"var(--blue)",  bg:"rgba(59,158,255,.10)",  border:"rgba(59,158,255,.28)", icon:"⚡", price:0.25, label:"Chance" }
