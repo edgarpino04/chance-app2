@@ -1741,13 +1741,15 @@ function TableroScreen({ vendor, cart, setCart, nav, vendorActiveSorteo=null }) 
   useEffect(() => {
     const code = typeof vendor.id === "string" ? vendor.id : `V${String(vendor.id).padStart(3,"0")}`;
     let active = true;
-    (async () => {
+    const cargar = async () => {
       try {
         const data = await fbRead(`vendedor_${code}/sorteoActivo`);
         if (active && data && data.tipo) setVendorOwnSorteo(data);
-      } catch(e) { /* sin GPS, usar default */ }
-    })();
-    return () => { active = false; };
+      } catch(e) {}
+    };
+    cargar();
+    const t = setInterval(cargar, 5000);
+    return () => { active = false; clearInterval(t); };
   }, [vendor.id]);
 
   const totalCartQty = cart.reduce((a,i)=>a+i.qty,0);
@@ -1791,9 +1793,23 @@ function TableroScreen({ vendor, cart, setCart, nav, vendorActiveSorteo=null }) 
   // billetes/chances asociados al mismo sorteo. Items legacy sin sorteoTipo
   // se consideran disponibles para cualquier sorteo (compatibilidad).
   // Prioridad: 1) sorteo del vendor leído directo de su path Firebase,
-  // 2) sorteoData del vendor (demos), 3) vendorActiveSorteo del root,
-  // 4) MIERCOLITO como default.
-  const sorteoTipoActivoVendor = vendorOwnSorteo?.tipo || vendor.sorteoData?.tipo || vendorActiveSorteo?.tipo || "MIERCOLITO";
+  // 2) sorteoData del vendor (demos), 3) DETECCIÓN AUTOMÁTICA por inventario,
+  // 4) vendorActiveSorteo del root, 5) MIERCOLITO como default.
+  // La detección automática es CRÍTICA: si el vendedor no ha publicado su
+  // sorteo activo (caso de migración o primera vez), miramos qué tipo de
+  // sorteo tienen sus billetes y usamos ese.
+  const sorteosEnInventario = [
+    ...new Set([
+      ...(vendor.billetes || []).map(b => b.sorteoTipo).filter(Boolean),
+      ...(vendor.chances  || []).map(c => c.sorteoTipo).filter(Boolean),
+    ]),
+  ];
+  const sorteoDetectadoDeInventario = sorteosEnInventario.length === 1 ? sorteosEnInventario[0] : null;
+  const sorteoTipoActivoVendor = vendorOwnSorteo?.tipo
+    || vendor.sorteoData?.tipo
+    || sorteoDetectadoDeInventario
+    || vendorActiveSorteo?.tipo
+    || "MIERCOLITO";
   const billetesFiltrados = (vendor.billetes||[]).filter(b => !b.sorteoTipo || b.sorteoTipo === sorteoTipoActivoVendor);
   const chancesFiltrados  = (vendor.chances ||[]).filter(c => !c.sorteoTipo || c.sorteoTipo === sorteoTipoActivoVendor);
   const items = tab==="billetes"?billetesFiltrados:chancesFiltrados;
@@ -1817,25 +1833,60 @@ function TableroScreen({ vendor, cart, setCart, nav, vendorActiveSorteo=null }) 
         </div>
       </div>
 
-      {/* Sorteo */}
-      <div style={{background:`${vendor.sorteoData?.bg||"rgba(244,196,48,.07)"}`,border:`1px solid ${vendor.sorteoData?.border||"rgba(244,196,48,.16)"}`,borderRadius:12,padding:"9px 13px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <div>
-          <div style={{fontSize:9,color:vendor.sorteoData?.color||"var(--gold)",fontWeight:800,letterSpacing:1.5,textTransform:"uppercase"}}>Sorteo Activo</div>
-          <div style={{fontFamily:"'Bebas Neue'",fontSize:17,color:"var(--text)",letterSpacing:2}}>
-            {vendor.sorteoData?.icon||"🎟"} {vendor.sorteoData?.tipo||vendor.sorteo}
+      {/* Sorteo — para vendedores reales usa vendorOwnSorteo (de su path Firebase) */}
+      {(() => {
+        // Build canonical sorteo object: prioridad
+        // 1) vendor.sorteoData (demos hardcodeados)
+        // 2) vendorOwnSorteo (vendedor real, leído de Firebase)
+        // 3) detección automática por inventario (sorteosEnInventario)
+        // 4) vendorActiveSorteo (fallback)
+        const sorteoTipo = vendor.sorteoData?.tipo
+          || vendorOwnSorteo?.tipo
+          || sorteoDetectadoDeInventario
+          || vendorActiveSorteo?.tipo
+          || "MIERCOLITO";
+        // Fecha: si tenemos el tipo detectado pero no fecha, usamos la del próximo sorteo
+        const sorteoActivoFromHelper = getSorteoActivo(sorteoTipo);
+        const sorteoFecha = vendor.sorteoData?.fecha
+          || vendorOwnSorteo?.fecha
+          || sorteoActivoFromHelper?.fecha
+          || "";
+        const sorteoN = vendor.sorteoData?.sorteoN
+          || vendorOwnSorteo?.sorteoN
+          || sorteoActivoFromHelper?.sorteoN
+          || "";
+        // Iconos y colores por tipo
+        const ICONOS = { MIERCOLITO:"⚡", DOMINICAL:"🌟", GORDITO:"🍀", EXTRAORDINARIA:"💎" };
+        const COLORS = {
+          MIERCOLITO: { color:"#3B9EFF", bg:"rgba(59,158,255,.07)", border:"rgba(59,158,255,.18)" },
+          DOMINICAL:  { color:"#F4C430", bg:"rgba(244,196,48,.07)", border:"rgba(244,196,48,.18)" },
+          GORDITO:    { color:"#00D68F", bg:"rgba(0,214,143,.07)",  border:"rgba(0,214,143,.18)" },
+          EXTRAORDINARIA: { color:"#A78BFA", bg:"rgba(167,139,250,.07)", border:"rgba(167,139,250,.18)" },
+        };
+        const cs = vendor.sorteoData || COLORS[sorteoTipo] || COLORS.MIERCOLITO;
+        const icon = vendor.sorteoData?.icon || ICONOS[sorteoTipo] || "🎟";
+        const premio = vendor.sorteoData?.premioMayor || (sorteoTipo==="GORDITO" ? "$1,004,000" : sorteoTipo==="EXTRAORDINARIA" ? "$1,000,000" : "$100,000");
+        return (
+          <div style={{background:cs.bg,border:`1px solid ${cs.border}`,borderRadius:12,padding:"9px 13px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div>
+              <div style={{fontSize:9,color:cs.color,fontWeight:800,letterSpacing:1.5,textTransform:"uppercase"}}>Sorteo Activo</div>
+              <div style={{fontFamily:"'Bebas Neue'",fontSize:17,color:"var(--text)",letterSpacing:2}}>
+                {icon} {sorteoTipo}
+              </div>
+              <div style={{fontSize:9,color:"var(--muted)",marginTop:1}}>{sorteoFecha}{sorteoN && ` · Nº ${sorteoN}`}</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:9,color:"var(--muted)",fontWeight:700}}>Premio Mayor</div>
+              <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:cs.color,letterSpacing:2}}>
+                {premio}
+              </div>
+              {vendor.sorteoData?.premios?.[0]?.num && (
+                <div style={{fontSize:9,color:"var(--muted)"}}>Último: {vendor.sorteoData.premios[0].num}</div>
+              )}
+            </div>
           </div>
-          <div style={{fontSize:9,color:"var(--muted)",marginTop:1}}>{vendor.sorteoData?.fecha||vendor.sorteo}</div>
-        </div>
-        <div style={{textAlign:"right"}}>
-          <div style={{fontSize:9,color:"var(--muted)",fontWeight:700}}>Premio Mayor</div>
-          <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:vendor.sorteoData?.color||"var(--gold)",letterSpacing:2}}>
-            {vendor.sorteoData?.premioMayor||"$150K"}
-          </div>
-          {vendor.sorteoData?.premios?.[0]?.num&&(
-            <div style={{fontSize:9,color:"var(--muted)"}}>Último: {vendor.sorteoData.premios[0].num}</div>
-          )}
-        </div>
-      </div>
+        );
+      })()}
 
       {/* Pestañas producto */}
       <div style={{display:"flex",gap:7,marginBottom:12}}>
@@ -8455,7 +8506,19 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
           // FASE 1 — PICKUP: status APROBADO → Repartidor va al VENDEDOR a recoger
           // FASE 2 — DROPOFF: status EN_CAMINO → Repartidor lleva al CLIENTE
           const fase = isApproved ? "pickup" : isInTransit ? "dropoff" : isDelivered ? "done" : "espera";
-          const vendorInfo = getVendorCoords(o.vendorId || "V001");
+          // Datos del vendedor: prioridad a los datos REALES del pedido (que se
+          // guardaron al hacer el pedido) sobre el lookup estático que solo
+          // conoce los demos V001/V002. Sin esto, todos los pedidos de
+          // vendedores reales mostraban "Carlos Medina · Calle 50".
+          const vendorStatic = getVendorCoords(o.vendorId || "V001");
+          const vendorInfo = {
+            name:    o.vendor      || vendorStatic.name,
+            phone:   o.vendorPhone || vendorStatic.phone,
+            address: o.vendorAddress || o.vendorLugar || vendorStatic.address,
+            zone:    o.vendorZone  || vendorStatic.zone,
+            lat:     o.vendorLat   || vendorStatic.lat,
+            lng:     o.vendorLng   || vendorStatic.lng,
+          };
 
           return (
             <div key={o.id} className="card" style={{marginBottom:9,border:isInTransit?"1px solid rgba(59,158,255,.3)":isDelivered?"1px solid rgba(0,214,143,.2)":isApproved?"1px solid rgba(244,196,48,.4)":"1px solid rgba(147,173,204,.2)"}}>
@@ -9334,6 +9397,29 @@ function App({ forceRole=null, authUser=null, onLogout=null,
         : vendorIdOrder === "V002" ? "vendedor_rosa"
         : "vendedor_carlos");
 
+    // Intentar leer datos reales del vendedor (nombre, teléfono, dirección)
+    // desde la lista de usuarios de Firebase. Si es un demo (V001/V002), se
+    // mantienen los datos estáticos. Si es real, se traen los suyos.
+    let vendorRealName    = items[0].vendor || vendorStaticOrder.name;
+    let vendorRealPhone   = vendorStaticOrder.phone;
+    let vendorRealAddress = vendorStaticOrder.address;
+    try {
+      let usersData = await fbRead("users");
+      if (usersData && !Array.isArray(usersData) && typeof usersData === "object") {
+        usersData = Object.values(usersData);
+      }
+      if (Array.isArray(usersData)) {
+        const vendUser = usersData.find(u =>
+          u && (u.id === vendorUserIdOrder || u.numeroBilletero === vendorIdOrder)
+        );
+        if (vendUser) {
+          vendorRealName    = vendUser.nombre || vendorRealName;
+          vendorRealPhone   = vendUser.telefono || vendorRealPhone;
+          vendorRealAddress = vendUser.lugarVende || vendUser.direccion || vendorRealAddress;
+        }
+      }
+    } catch(e) { /* fallback */ }
+
     // Intentar leer la última ubicación GPS conocida del vendedor en Firebase.
     // Si el vendedor tiene GPS activo, usamos esas coords. Si no, fallback al
     // VENDOR_COORDS estático. Esto resuelve el bug de "vendedor en Bella Vista
@@ -9360,9 +9446,13 @@ function App({ forceRole=null, authUser=null, onLogout=null,
     setSharedOrders(p=>[...p,{
       id, type:items[0].type, num:items[0].num, qty:items[0].qty,
       items:items.map(i=>({type:i.type,num:i.num,qty:i.qty,price:i.price,subtotal:(i.price*i.qty).toFixed(2)})),
-      itemCount:items.length, vendor:items[0].vendor||"Carlos Medina V001",
-      vendorId: vendorIdOrder, lotteryValue:lotteryTotal.toFixed(2),
-      vendorUserId: vendorUserIdOrder,
+      itemCount:items.length,
+      // Datos del vendedor REAL (no demo) — se usan en el módulo del repartidor
+      vendor:        vendorRealName,
+      vendorPhone:   vendorRealPhone,
+      vendorAddress: vendorRealAddress,
+      vendorId:      vendorIdOrder, lotteryValue:lotteryTotal.toFixed(2),
+      vendorUserId:  vendorUserIdOrder,
       // Zona aproximada del vendedor para mostrar al comprador en el mapa.
       // Prioridad: zona del item del carrito (vendedor real) > zona estática (demo).
       vendorZone:  items[0].vendorZone || vendorStaticOrder.zone,
@@ -12050,13 +12140,19 @@ export default function ChanceRoot() {
     // todos los dispositivos en ~5s y la lista de vendedores se actualiza.
     const stopUsers = fbListen("users", (data) => {
       try {
-        if (Array.isArray(data)) {
-          const newHash = JSON.stringify(data);
+        // Firebase a veces convierte arrays a objetos {0:u, 1:u,...}. Convertir.
+        let arr = data;
+        if (arr && !Array.isArray(arr) && typeof arr === "object") {
+          arr = Object.values(arr);
+        }
+        if (Array.isArray(arr)) {
+          const cleaned = arr.filter(u => u && typeof u === "object");
+          const newHash = JSON.stringify(cleaned);
           if (newHash !== usersHashRef.current) {
             usersHashRef.current = newHash;
-            setAllUsers(data);
+            setAllUsers(cleaned);
             // También actualizamos el storage local para uso offline
-            try { window.storage.set("users_db", JSON.stringify(data)); } catch(e) {}
+            try { window.storage.set("users_db", JSON.stringify(cleaned)); } catch(e) {}
           }
         }
       } catch(e) { console.warn("Listener users:", e.message); }
@@ -12067,8 +12163,14 @@ export default function ChanceRoot() {
       try {
         const r = await window.storage.get("users_db");
         if (r?.value) {
-          const local = JSON.parse(r.value);
-          if (Array.isArray(local) && local.length > 0) setAllUsers(local);
+          let local = JSON.parse(r.value);
+          // Por si quedó como objeto en storage también
+          if (local && !Array.isArray(local) && typeof local === "object") {
+            local = Object.values(local);
+          }
+          if (Array.isArray(local) && local.length > 0) {
+            setAllUsers(local.filter(u => u && typeof u === "object"));
+          }
         }
       } catch(e) {}
     })();
