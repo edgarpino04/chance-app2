@@ -8511,11 +8511,167 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
         {id:"CH-DEMO2",lotteryValue:"10.00",deliveryFee:"2.00",tip:"0",paymentMethod:"YAPPY",buildingId:"torre_pacific_ph",coordinates:{lat:8.9936,lng:-79.5197},createdAt:NOW+60000},
         {id:"CH-DEMO3",lotteryValue:"10.00",deliveryFee:"2.00",tip:"0",paymentMethod:"CASH",buildingId:"torre_pacific_ph",coordinates:{lat:8.9936,lng:-79.5197},createdAt:NOW+120000},
       ];
-  const demoBatch = calculateBatchPayout(batchSource, "driver_juan");
+  // ── BATCH REAL — agrupa pedidos APROBADOS cercanos entre sí ──────────────
+  // Usa los approvedOrders reales (ya ordenados por distancia al repartidor).
+  // Un batch se forma cuando hay 2+ pedidos dentro de 1km entre sí.
+  const realBatch = (() => {
+    if (approvedOrders.length < 1) return null;
+    // Para go-live, si hay al menos 1 pedido aprobado lo mostramos como batch
+    const batchOrders = approvedOrders.slice(0, BATCH.MAX_ORDERS);
+    const totalEarnings = batchOrders.reduce((sum, o) => {
+      const et = calcOrderTotals(o.lotteryValue||"1.00", o.deliveryFee||"2.50", o.tip||"0");
+      return sum + (parseFloat(et._driver) || 0);
+    }, 0);
+    const cashOrders  = batchOrders.filter(o => o.paymentMethod === "CASH").length;
+    const yappyOrders = batchOrders.filter(o => o.paymentMethod !== "CASH").length;
+    return {
+      batchId:         `BATCH-${Date.now().toString(36).toUpperCase()}`,
+      orderCount:      batchOrders.length,
+      orders:          batchOrders,
+      riderTotalPayout: totalEarnings.toFixed(2),
+      cashSummary: {
+        cashOrders, yappyOrders,
+        totalRiderCashDebt: batchOrders
+          .filter(o => o.paymentMethod === "CASH")
+          .reduce((s, o) => {
+            const et = calcOrderTotals(o.lotteryValue||"1.00", o.deliveryFee||"2.50", o.tip||"0");
+            return s + (parseFloat(et._appSvc||0) + parseFloat(et._appComm||0));
+          }, 0).toFixed(2),
+      },
+      rows: batchOrders.map(o => {
+        const et = calcOrderTotals(o.lotteryValue||"1.00", o.deliveryFee||"2.50", o.tip||"0");
+        return {
+          v: `$${parseFloat(et._driver||0).toFixed(2)}`,
+          l: `${o.id} · ${o.vendor || "Vendedor"} → ${o.deliveryAddr || "Cliente"}`,
+          bold: false,
+        };
+      }),
+    };
+  })();
 
-  const [balance, setBalance] = useState({
-    wallet:8450, debtToApp:0, earned:1200, deliveries:0, cashHeld:0, yappyBalance:1200,
-  });
+  // ══════════════════════════════════════════════════════════════════════
+  // BILLETERA PERSISTENTE — guardada en Firebase por repartidor
+  // Se sincroniza entre sesiones y dispositivos
+  // ══════════════════════════════════════════════════════════════════════
+  const WALLET_PATH = `billeteras/${repartidorUserId}`;
+  const WALLET_INITIAL = {
+    saldo: 0,          // saldo disponible en billetera virtual
+    ganado: 0,         // total ganado (delivery + propinas) hoy
+    entregas: 0,       // total entregas completadas hoy
+    efectivoMano: 0,   // efectivo físico que tiene en mano (cobrado a clientes)
+    deudaApp: 0,       // lo que debe a la app (service fee de pedidos en efectivo)
+    historia: [],      // log de transacciones
+    actualizadoEl: null,
+  };
+
+  const [wallet, setWallet] = useState(WALLET_INITIAL);
+  const [walletLoaded, setWalletLoaded] = useState(false);
+
+  // Cargar billetera desde Firebase al montar
+  useEffect(() => {
+    let active = true;
+    const cargar = async () => {
+      try {
+        const data = await fbRead(WALLET_PATH);
+        if (active && data && typeof data === "object") {
+          setWallet({ ...WALLET_INITIAL, ...data });
+        }
+      } catch(e) {}
+      if (active) setWalletLoaded(true);
+    };
+    cargar();
+    // Polling cada 10s para sincronizar si el admin hace ajustes
+    const t = setInterval(cargar, 10000);
+    return () => { active = false; clearInterval(t); };
+  }, [repartidorUserId]);
+
+  // Guardar billetera en Firebase
+  const saveWallet = async (next) => {
+    const updated = { ...wallet, ...next, actualizadoEl: new Date().toLocaleString("es-PA") };
+    setWallet(updated);
+    try { await fbWrite(WALLET_PATH, updated); } catch(e) {}
+    return updated;
+  };
+
+  // Añadir transacción al historial
+  const addTx = (wallet, desc, monto, tipo) => {
+    const tx = {
+      id: Date.now().toString(36),
+      ts: new Date().toLocaleString("es-PA"),
+      desc, monto, tipo // "ingreso" | "egreso" | "deuda" | "liquidacion" | "entrega"
+    };
+    return { ...wallet, historia: [tx, ...(wallet.historia||[])].slice(0, 50) };
+  };
+
+  // Registrar entrega completada en la billetera
+  const registrarEntrega = async (order) => {
+    const et = calcOrderTotals(order.lotteryValue||"1.00", order.deliveryFee||"2.50", order.tip||"0");
+    const esEfectivo = order.paymentMethod === "CASH";
+    const ganancia   = parseFloat(et._driver) || 0;
+    const deuda      = esEfectivo ? (parseFloat(et._appSvc||0) + parseFloat(et._appComm||0)) : 0;
+    const efectivo   = esEfectivo ? parseFloat(et._customerTotal||0) : 0;
+
+    let next = {
+      saldo:        wallet.saldo + ganancia,
+      ganado:       wallet.ganado + ganancia,
+      entregas:     wallet.entregas + 1,
+      deudaApp:     wallet.deudaApp + deuda,
+      efectivoMano: wallet.efectivoMano + efectivo,
+    };
+    next = addTx(next,
+      `Entrega ${order.id} · ${esEfectivo ? "Efectivo" : "Yappy"}`,
+      ganancia, "entrega"
+    );
+    await saveWallet(next);
+  };
+
+  // Liquidar deuda con la app
+  const liquidarDeuda = async () => {
+    if (wallet.deudaApp <= 0) return;
+    const monto = wallet.deudaApp;
+    let next = {
+      deudaApp:     0,
+      efectivoMano: Math.max(0, wallet.efectivoMano - monto),
+    };
+    next = addTx(next, `Liquidación App · ${fmt(monto * 100)}`, -monto, "liquidacion");
+    await saveWallet(next);
+    setShowLiquidarModal(false);
+    toast("✅ Deuda liquidada. Estás al día con CHANCE.");
+  };
+
+  // Depositar dinero en la billetera (ingreso manual — simula Yappy/banco)
+  const depositar = async (monto, metodo) => {
+    let next = { saldo: wallet.saldo + monto };
+    next = addTx(next, `Depósito · ${metodo}`, monto, "ingreso");
+    await saveWallet(next);
+    setShowDepositoModal(false);
+    toast(`✅ $${monto.toFixed(2)} acreditados a tu billetera`);
+  };
+
+  // Modales
+  const [showLiquidarModal, setShowLiquidarModal] = useState(false);
+  const [showDepositoModal, setShowDepositoModal] = useState(false);
+  const [depositoMonto, setDepositoMonto] = useState("");
+  const [depositoMetodo, setDepositoMetodo] = useState("Yappy");
+  const [depositoRef, setDepositoRef] = useState("");
+
+  const handleDeliver = async (orderId) => {
+    onDeliver && onDeliver(orderId);
+    const order = orders.find(o => o.id === orderId);
+    if (order) await registrarEntrega(order);
+  };
+
+  // Alias para compatibilidad con código existente de calculadora
+  const balance = {
+    wallet:       wallet.saldo * 100,
+    earned:       wallet.ganado * 100,
+    deliveries:   wallet.entregas,
+    cashHeld:     wallet.efectivoMano * 100,
+    yappyBalance: 0,
+    debtToApp:    wallet.deudaApp * 100,
+  };
+
+  const fmt = cents => '$' + (Math.abs(cents) / 100).toFixed(2);
 
   const [calcLottery,  setCalcLottery]  = useState("2.00");
   const [calcDelivery, setCalcDelivery] = useState("2.50");
@@ -8526,32 +8682,6 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
     try { return calcOrderTotals(calcLottery||"0", calcDelivery||"0", calcTip||"0"); }
     catch { return null; }
   })();
-
-  const simulateDelivery = () => {
-    if (!liveT) return;
-    const gain = liveT._driver;
-    // En efectivo: el Repartidor debe a la App el service fee $1.00 + la comisión 2.5%
-    // (ambos cobrados físicamente por él al cliente)
-    const debt = calcMethod==="efectivo" ? (liveT._appSvc + liveT._appComm) : 0;
-    setBalance(b=>({
-      wallet:b.wallet+gain, debtToApp:b.debtToApp+debt, earned:b.earned+gain,
-      deliveries:b.deliveries+1,
-      cashHeld:calcMethod==="efectivo"?b.cashHeld+liveT._customerTotal:b.cashHeld,
-      yappyBalance:calcMethod==="yappy"?b.yappyBalance+gain:b.yappyBalance,
-    }));
-  };
-
-  const settleDebt = () => {
-    if(balance.debtToApp<=0) return;
-    setBalance(b=>({...b,debtToApp:0,cashHeld:Math.max(0,b.cashHeld-b.debtToApp)}));
-  };
-
-  const handleDeliver = (orderId) => {
-    onDeliver&&onDeliver(orderId);
-    setBalance(b=>({...b,deliveries:b.deliveries+1,earned:b.earned+250}));
-  };
-
-  const fmt = cents => '$'+(Math.abs(cents)/100).toFixed(2);
 
   const tabs = [
     {id:"inicio",      l:"Inicio",    ic:"home"},
@@ -8600,24 +8730,24 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
           </div>
         )}
 
-        {approvedOrders.length>0&&(
+        {approvedOrders.length>=2&&realBatch&&(
           <div style={{background:"rgba(0,214,143,.08)",border:"1px solid rgba(0,214,143,.3)",borderRadius:12,padding:"10px 13px",display:"flex",gap:10,alignItems:"center",marginBottom:12,cursor:"pointer"}} onClick={()=>setRTab("batch")}>
             <div style={{width:36,height:36,borderRadius:10,background:"rgba(0,214,143,.15)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic n="truck" s={16} c="var(--green)"/></div>
             <div style={{flex:1}}>
-              <div style={{fontSize:11,fontWeight:800,color:"var(--green)"}}>✅ {approvedOrders.length} pedido(s) listos para entregar</div>
-              <div style={{fontSize:10,color:"var(--muted)"}}>El vendedor aprobó · Toca para ver batch</div>
+              <div style={{fontSize:11,fontWeight:800,color:"var(--green)"}}>⚡ {realBatch.orderCount} pedidos listos — ver como Batch</div>
+              <div style={{fontSize:10,color:"var(--muted)"}}>Ganancia estimada: ${realBatch.riderTotalPayout}</div>
             </div>
             <Ic n="chevR" s={14} c="var(--green)"/>
           </div>
         )}
-        {approvedOrders.length===0&&!batchAccepted&&(
-          <div style={{background:"rgba(244,196,48,.08)",border:"1px solid rgba(244,196,48,.3)",borderRadius:12,padding:"10px 13px",display:"flex",gap:10,alignItems:"center",marginBottom:12,cursor:"pointer"}} onClick={()=>setRTab("batch")}>
-            <div style={{width:36,height:36,borderRadius:10,background:"rgba(244,196,48,.15)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic n="zap" s={16} c="var(--gold)"/></div>
+        {approvedOrders.length===1&&(
+          <div style={{background:"rgba(0,214,143,.08)",border:"1px solid rgba(0,214,143,.3)",borderRadius:12,padding:"10px 13px",display:"flex",gap:10,alignItems:"center",marginBottom:12,cursor:"pointer"}} onClick={()=>setRTab("batch")}>
+            <div style={{width:36,height:36,borderRadius:10,background:"rgba(0,214,143,.15)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic n="truck" s={16} c="var(--green)"/></div>
             <div style={{flex:1}}>
-              <div style={{fontSize:11,fontWeight:800,color:"var(--gold)"}}>⚡ Batch demo disponible</div>
-              <div style={{fontSize:10,color:"var(--muted)"}}>3 pedidos agrupados · Ganancia: ${demoBatch.riderTotalPayout}</div>
+              <div style={{fontSize:11,fontWeight:800,color:"var(--green)"}}>✅ 1 pedido listo para entregar</div>
+              <div style={{fontSize:10,color:"var(--muted)"}}>Toca para ver detalles y recoger</div>
             </div>
-            <Ic n="chevR" s={14} c="var(--gold)"/>
+            <Ic n="chevR" s={14} c="var(--green)"/>
           </div>
         )}
         <div className="row" style={{justifyContent:"space-between",marginBottom:12}}>
@@ -8931,42 +9061,95 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
       </>}
       {/* ── TAB: BATCH ── */}
       {rTab==="batch"&&<>
-        <div style={{background:"rgba(255,75,110,.07)",border:"1px solid rgba(255,75,110,.2)",borderRadius:11,padding:"9px 13px",display:"flex",gap:8,marginBottom:12,alignItems:"center"}}>
-          <Ic n="zap" s={14} c="var(--red)"/>
-          <div style={{flex:1}}>
-            <div style={{fontSize:11,color:"var(--red)",fontWeight:800}}>Viaje Agrupado Disponible</div>
-            <div style={{fontSize:10,color:"var(--muted)"}}>3 pedidos · Torre Pacific PH · mismo edificio</div>
-          </div>
-          <div style={{fontFamily:"'Bebas Neue'",fontSize:20,color:"var(--gold)",letterSpacing:1}}>
-            ${demoBatch.riderTotalPayout}
-          </div>
-        </div>
+        <div style={{fontFamily:"'Bebas Neue'",fontSize:20,color:"var(--gold)",letterSpacing:2,marginBottom:14}}>VIAJES EN BATCH</div>
 
-        {/* Algoritmo de agrupación — visual explicativo */}
-        <div className="card" style={{marginBottom:10}}>
-          <div className="sec" style={{marginBottom:9}}>Algoritmo de Agrupación</div>
-          {[
-            {icon:"⏱",l:"Ventana de tiempo",  v:"10 minutos",                    c:"var(--blue)"},
-            {icon:"📍",l:"Criterio GPS",       v:"≤ 500 m o mismo edificio",      c:"var(--gold)"},
-            {icon:"📦",l:"Máximo por viaje",   v:"5 pedidos",                     c:"var(--purple)"},
-            {icon:"✅",l:"Pedidos agrupados",  v:`${demoBatch.orderCount} / ${BATCH.MAX_ORDERS}`,c:"var(--green)"},
-          ].map(r=>(
-            <div key={r.l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <span style={{fontSize:16,width:22,textAlign:"center",flexShrink:0}}>{r.icon}</span>
-                <span style={{fontSize:11,color:"var(--muted)"}}>{r.l}</span>
+        {realBatch ? (
+          <>
+            {/* Header del batch */}
+            <div style={{background:"rgba(0,214,143,.08)",border:"1px solid rgba(0,214,143,.3)",borderRadius:12,padding:"12px 14px",marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div>
+                  <div style={{fontSize:9,color:"var(--green)",fontWeight:800,letterSpacing:1,textTransform:"uppercase"}}>Batch disponible</div>
+                  <div style={{fontFamily:"'Bebas Neue'",fontSize:24,color:"var(--text)",letterSpacing:1}}>{realBatch.orderCount} {realBatch.orderCount===1?"pedido":"pedidos"} agrupados</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:9,color:"var(--muted)"}}>Tu ganancia</div>
+                  <div style={{fontFamily:"'Bebas Neue'",fontSize:32,color:"var(--green)",letterSpacing:1}}>${realBatch.riderTotalPayout}</div>
+                </div>
               </div>
-              <span style={{fontSize:12,fontWeight:800,color:r.c}}>{r.v}</span>
+              <div style={{display:"flex",gap:8}}>
+                <div style={{flex:1,background:"rgba(255,255,255,.04)",borderRadius:8,padding:"6px 10px",textAlign:"center"}}>
+                  <div style={{fontSize:9,color:"var(--muted)"}}>💵 Efectivo</div>
+                  <div style={{fontSize:14,fontWeight:800,color:"var(--gold)"}}>{realBatch.cashSummary.cashOrders}</div>
+                </div>
+                <div style={{flex:1,background:"rgba(255,255,255,.04)",borderRadius:8,padding:"6px 10px",textAlign:"center"}}>
+                  <div style={{fontSize:9,color:"var(--muted)"}}>📱 Yappy</div>
+                  <div style={{fontSize:14,fontWeight:800,color:"var(--blue)"}}>{realBatch.cashSummary.yappyOrders}</div>
+                </div>
+                {parseFloat(realBatch.cashSummary.totalRiderCashDebt)>0&&(
+                  <div style={{flex:1,background:"rgba(255,75,110,.06)",borderRadius:8,padding:"6px 10px",textAlign:"center"}}>
+                    <div style={{fontSize:9,color:"var(--muted)"}}>Deuda App</div>
+                    <div style={{fontSize:14,fontWeight:800,color:"var(--red)"}}>${realBatch.cashSummary.totalRiderCashDebt}</div>
+                  </div>
+                )}
+              </div>
             </div>
-          ))}
-        </div>
 
-        <BatchTripCard
-          batch={demoBatch}
-          isActive={batchAccepted}
-          onAccept={()=>setBatchAccepted(true)}
-          onDecline={()=>setRTab("inicio")}
-        />
+            {/* Lista de pedidos del batch */}
+            {realBatch.orders.map((o, idx) => {
+              const et = calcOrderTotals(o.lotteryValue||"1.00", o.deliveryFee||"2.50", o.tip||"0");
+              const sc = getVendorCoords(o.vendorId||"V001");
+              const dp = miUbicacion ? calcularDistancia(miUbicacion.lat, miUbicacion.lng, o.vendorLat||sc.lat, o.vendorLng||sc.lng) : null;
+              const { dist } = formatDistancia(dp);
+              return (
+                <div key={o.id} className="card" style={{marginBottom:9,borderLeft:`3px solid ${idx===0?"var(--green)":"var(--blue)"}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                    <div>
+                      <div style={{fontSize:10,color:"var(--muted)",fontWeight:700}}>{o.id} <span style={{fontSize:8,background:idx===0?"rgba(0,214,143,.15)":"rgba(59,158,255,.15)",color:idx===0?"var(--green)":"var(--blue)",padding:"1px 5px",borderRadius:4,marginLeft:4}}>{idx===0?"1er PICKUP":"SIGUIENTE"}</span></div>
+                      <div style={{fontSize:12,fontWeight:800,color:"var(--text)",marginTop:2}}>{o.vendor||"Vendedor"}</div>
+                      <div style={{fontSize:10,color:"var(--muted)"}}>📍 {o.vendorZone||"Zona"} {dp!=null&&`· ${dist}`}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--green)",letterSpacing:1}}>${parseFloat(et._driver||0).toFixed(2)}</div>
+                      <div style={{fontSize:9,color:"var(--muted)"}}>{o.paymentMethod==="CASH"?"💵 Efectivo":"📱 Yappy"}</div>
+                    </div>
+                  </div>
+                  <div style={{fontSize:10,color:"var(--muted)"}}>🏠 → {o.deliveryAddr||"Cliente"}</div>
+                </div>
+              );
+            })}
+
+            {/* Botones de acción */}
+            {!batchAccepted ? (
+              <div style={{display:"flex",gap:8,marginTop:4}}>
+                <button onClick={()=>setRTab("inicio")}
+                  style={{flex:1,padding:"12px",borderRadius:12,background:"transparent",border:"1px solid var(--border)",color:"var(--muted)",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                  Ver uno por uno
+                </button>
+                <button onClick={()=>{ setBatchAccepted(true); toast("✅ Batch aceptado — ve a recoger en orden"); }}
+                  style={{flex:2,padding:"12px",borderRadius:12,background:"linear-gradient(135deg,var(--green),#00B87A)",border:"none",color:"#08111F",fontSize:13,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                  ⚡ Aceptar Batch · ${realBatch.riderTotalPayout}
+                </button>
+              </div>
+            ) : (
+              <div style={{background:"rgba(0,214,143,.08)",border:"1px solid rgba(0,214,143,.3)",borderRadius:12,padding:"12px",textAlign:"center"}}>
+                <div style={{fontSize:24,marginBottom:4}}>🛵</div>
+                <div style={{fontWeight:800,fontSize:13,color:"var(--green)"}}>Batch en progreso</div>
+                <div style={{fontSize:11,color:"var(--muted)",marginTop:2}}>Sigue el orden de pickup → entrega en la tab "Inicio"</div>
+                <button onClick={()=>{ setBatchAccepted(false); toast("Batch cancelado"); }}
+                  style={{marginTop:10,padding:"6px 16px",borderRadius:9,background:"transparent",border:"1px solid rgba(255,75,110,.4)",color:"var(--red)",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                  Cancelar batch
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{textAlign:"center",padding:"40px 0",opacity:.7}}>
+            <div style={{fontSize:48,marginBottom:12}}>📦</div>
+            <div style={{fontSize:14,fontWeight:800,color:"var(--text)"}}>Sin pedidos para batch</div>
+            <div style={{fontSize:11,color:"var(--muted)",marginTop:4}}>Cuando haya 2+ pedidos aprobados aparecerán agrupados aquí</div>
+          </div>
+        )}
       </>}
 
       {/* ── TAB: CALCULADORA ── */}
@@ -9090,72 +9273,184 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
         </>}
       </>}
 
-      {/* ── TAB: LIQUIDACIÓN ── */}
-      {rTab==="liquidacion"&&<>
-        <div style={{fontFamily:"'Bebas Neue'",fontSize:20,color:"var(--gold)",letterSpacing:2,marginBottom:14}}>RESUMEN DE LIQUIDACIÓN</div>
-
-        {/* Billetera */}
-        <div className="wallet">
-          <div style={{fontSize:9,color:"var(--muted)",fontWeight:800,textTransform:"uppercase",letterSpacing:1.5}}>Saldo Billetera</div>
-          <div style={{fontFamily:"'Bebas Neue'",fontSize:40,color:"var(--gold)",letterSpacing:2,lineHeight:1,margin:"5px 0"}}>{fmt(balance.wallet)}</div>
-          <div style={{display:"flex",gap:10}}>
-            <div style={{flex:1,background:"rgba(0,214,143,.08)",borderRadius:10,padding:"8px 10px",border:"1px solid rgba(0,214,143,.18)"}}>
-              <div style={{fontSize:9,color:"var(--muted)"}}>💵 Efectivo en mano</div>
-              <div style={{fontSize:15,fontWeight:800,color:"var(--gold)",marginTop:2}}>{fmt(balance.cashHeld)}</div>
+      {/* ── MODALES ── */}
+      {showLiquidarModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:999,display:"flex",alignItems:"flex-end"}}>
+          <div style={{background:"var(--bg2)",borderRadius:"20px 20px 0 0",padding:"24px 20px",width:"100%",maxWidth:480,margin:"0 auto"}}>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:"var(--red)",letterSpacing:2,marginBottom:8}}>LIQUIDAR DEUDA</div>
+            <div style={{fontSize:11,color:"var(--muted)",marginBottom:16,lineHeight:1.5}}>
+              Estás a punto de declarar que pagaste a CHANCE el service fee de los pedidos en efectivo. Asegúrate de haber transferido el dinero antes de confirmar.
             </div>
-            <div style={{flex:1,background:"rgba(59,158,255,.08)",borderRadius:10,padding:"8px 10px",border:"1px solid rgba(59,158,255,.18)"}}>
-              <div style={{fontSize:9,color:"var(--muted)"}}>📱 Yappy acreditado</div>
-              <div style={{fontSize:15,fontWeight:800,color:"var(--blue)",marginTop:2}}>{fmt(balance.yappyBalance)}</div>
+            <div style={{background:"rgba(255,75,110,.07)",border:"1px solid rgba(255,75,110,.3)",borderRadius:12,padding:"14px",marginBottom:16,textAlign:"center"}}>
+              <div style={{fontSize:11,color:"var(--muted)"}}>Monto a liquidar</div>
+              <div style={{fontFamily:"'Bebas Neue'",fontSize:44,color:"var(--red)",letterSpacing:2}}>${wallet.deudaApp.toFixed(2)}</div>
+              <div style={{fontSize:10,color:"var(--muted)",marginTop:4}}>Service fee de {wallet.historia?.filter(h=>h.tipo==="entrega").length||0} entregas en efectivo</div>
+            </div>
+            <div style={{background:"rgba(244,196,48,.07)",borderRadius:10,padding:"10px 13px",marginBottom:16}}>
+              <div style={{fontSize:10,color:"var(--gold)",fontWeight:700,marginBottom:3}}>📱 Envía a CHANCE via Yappy</div>
+              <div style={{fontSize:12,fontWeight:800,color:"var(--text)"}}>Yappy: 6000-CHANCE</div>
+              <div style={{fontSize:10,color:"var(--muted)"}}>Concepto: LIQUIDAR {repartidorUserId.toUpperCase()}</div>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setShowLiquidarModal(false)}
+                style={{flex:1,padding:"12px",borderRadius:12,background:"transparent",border:"1px solid var(--border)",color:"var(--muted)",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                Cancelar
+              </button>
+              <button onClick={liquidarDeuda}
+                style={{flex:2,padding:"12px",borderRadius:12,background:"linear-gradient(135deg,var(--red),#cc2a4e)",border:"none",color:"#fff",fontSize:13,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                ✅ Confirmar liquidación
+              </button>
             </div>
           </div>
         </div>
+      )}
 
-        {/* Ganancia del día */}
-        <div className="card">
-          <div className="sec" style={{marginBottom:10}}>Ganancia del Día</div>
+      {showDepositoModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:999,display:"flex",alignItems:"flex-end"}}>
+          <div style={{background:"var(--bg2)",borderRadius:"20px 20px 0 0",padding:"24px 20px",width:"100%",maxWidth:480,margin:"0 auto"}}>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:"var(--green)",letterSpacing:2,marginBottom:8}}>DEPOSITAR A BILLETERA</div>
+            <div style={{fontSize:11,color:"var(--muted)",marginBottom:16}}>Ingresa dinero a tu billetera virtual para usarlo en próximos pagos o como reserva.</div>
+            <div style={{marginBottom:12}}>
+              <div style={{fontSize:10,fontWeight:800,color:"var(--muted)",letterSpacing:1,marginBottom:6}}>MONTO A DEPOSITAR</div>
+              <div style={{display:"flex",alignItems:"center",background:"var(--bg3)",borderRadius:12,border:"1px solid var(--border)",padding:"0 14px"}}>
+                <span style={{fontSize:20,fontWeight:800,color:"var(--green)",marginRight:6}}>$</span>
+                <input type="number" value={depositoMonto} onChange={e=>setDepositoMonto(e.target.value)}
+                  placeholder="0.00" min="1" step="0.50"
+                  style={{flex:1,background:"transparent",border:"none",outline:"none",fontSize:24,fontFamily:"'Bebas Neue'",color:"var(--text)",letterSpacing:1,padding:"14px 0"}}/>
+              </div>
+              {/* Montos rápidos */}
+              <div style={{display:"flex",gap:8,marginTop:8}}>
+                {["5","10","20","50"].map(m=>(
+                  <button key={m} onClick={()=>setDepositoMonto(m)}
+                    style={{flex:1,padding:"7px",borderRadius:9,background:depositoMonto===m?"rgba(0,214,143,.15)":"var(--bg3)",border:`1px solid ${depositoMonto===m?"var(--green)":"var(--border)"}`,color:depositoMonto===m?"var(--green)":"var(--muted)",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                    ${m}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:10,fontWeight:800,color:"var(--muted)",letterSpacing:1,marginBottom:6}}>MÉTODO</div>
+              <div style={{display:"flex",gap:8}}>
+                {["Yappy","Banco","Efectivo"].map(m=>(
+                  <button key={m} onClick={()=>setDepositoMetodo(m)}
+                    style={{flex:1,padding:"10px",borderRadius:10,background:depositoMetodo===m?"rgba(59,158,255,.15)":"var(--bg3)",border:`1px solid ${depositoMetodo===m?"var(--blue)":"var(--border)"}`,color:depositoMetodo===m?"var(--blue)":"var(--muted)",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                    {m==="Yappy"?"📱":"m"==="Banco"?"🏦":"💵"} {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:10,fontWeight:800,color:"var(--muted)",letterSpacing:1,marginBottom:6}}>REFERENCIA (opcional)</div>
+              <input value={depositoRef} onChange={e=>setDepositoRef(e.target.value)}
+                placeholder="Nº de transacción / comprobante"
+                style={{width:"100%",padding:"11px 14px",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:10,color:"var(--text)",fontSize:12,fontFamily:"'DM Sans'",outline:"none"}}/>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setShowDepositoModal(false)}
+                style={{flex:1,padding:"12px",borderRadius:12,background:"transparent",border:"1px solid var(--border)",color:"var(--muted)",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                Cancelar
+              </button>
+              <button
+                disabled={!depositoMonto||parseFloat(depositoMonto)<=0}
+                onClick={()=>depositar(parseFloat(depositoMonto), depositoMetodo+(depositoRef?` · Ref:${depositoRef}`:""))}
+                style={{flex:2,padding:"12px",borderRadius:12,background:!depositoMonto||parseFloat(depositoMonto)<=0?"var(--bg3)":"linear-gradient(135deg,var(--green),#00B87A)",border:"none",color:!depositoMonto||parseFloat(depositoMonto)<=0?"var(--muted)":"#08111F",fontSize:13,fontWeight:800,cursor:!depositoMonto||parseFloat(depositoMonto)<=0?"not-allowed":"pointer",fontFamily:"'DM Sans'"}}>
+                ✅ Depositar ${parseFloat(depositoMonto||0).toFixed(2)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── TAB: LIQUIDACIÓN ── */}
+      {rTab==="liquidacion"&&<>
+        <div style={{fontFamily:"'Bebas Neue'",fontSize:20,color:"var(--gold)",letterSpacing:2,marginBottom:14}}>BILLETERA & LIQUIDACIÓN</div>
+
+        {/* Saldo principal */}
+        <div className="wallet" style={{marginBottom:12}}>
+          <div style={{fontSize:9,color:"var(--muted)",fontWeight:800,textTransform:"uppercase",letterSpacing:1.5}}>Saldo Billetera</div>
+          <div style={{fontFamily:"'Bebas Neue'",fontSize:44,color:"var(--gold)",letterSpacing:2,lineHeight:1,margin:"5px 0"}}>${wallet.saldo.toFixed(2)}</div>
+          <div style={{display:"flex",gap:8,marginTop:4}}>
+            <button onClick={()=>setShowDepositoModal(true)}
+              style={{flex:1,padding:"9px",borderRadius:10,background:"rgba(0,214,143,.12)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+              ➕ Depositar
+            </button>
+            {wallet.deudaApp>0&&(
+              <button onClick={()=>setShowLiquidarModal(true)}
+                style={{flex:1,padding:"9px",borderRadius:10,background:"rgba(255,75,110,.12)",border:"1px solid rgba(255,75,110,.3)",color:"var(--red)",fontSize:11,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                ⚡ Liquidar ${wallet.deudaApp.toFixed(2)}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Resumen del día */}
+        <div className="card" style={{marginBottom:10}}>
+          <div className="sec" style={{marginBottom:10}}>Resumen del Día</div>
           {[
-            {l:"Total ganado (delivery + propinas)", v:fmt(balance.earned), c:"var(--green)"},
-            {l:"Entregas realizadas",                v:String(balance.deliveries), c:"var(--text)"},
+            {l:"Ganado (delivery + propinas)", v:`$${wallet.ganado.toFixed(2)}`, c:"var(--green)"},
+            {l:"Entregas completadas",          v:String(wallet.entregas + deliveredOrders.length), c:"var(--text)"},
+            {l:"Efectivo en mano",              v:`$${wallet.efectivoMano.toFixed(2)}`, c:"var(--gold)"},
+            {l:"Deuda pendiente con App",       v:`$${wallet.deudaApp.toFixed(2)}`, c:wallet.deudaApp>0?"var(--red)":"var(--green)"},
           ].map(({l,v,c})=>(
-            <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:7}}>
-              <span style={{fontSize:13,color:"var(--muted)"}}>{l}</span>
-              <span style={{fontSize:15,fontWeight:800,color:c}}>{v}</span>
+            <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:8,paddingBottom:8,borderBottom:"1px solid rgba(255,255,255,.04)"}}>
+              <span style={{fontSize:12,color:"var(--muted)"}}>{l}</span>
+              <span style={{fontSize:14,fontWeight:800,color:c}}>{v}</span>
             </div>
           ))}
         </div>
 
-        {/* Deuda pendiente */}
-        {balance.debtToApp>0?(
-          <div className="card" style={{border:"1px solid rgba(255,75,110,.28)",background:"rgba(255,75,110,.05)"}}>
-            <div className="sec" style={{marginBottom:8,color:"var(--red)"}}>⚠️ Deuda Pendiente con App</div>
-            <div style={{fontSize:11,color:"var(--muted)",marginBottom:8,lineHeight:1.5}}>
-              Por pedidos en efectivo no liquidados. Corresponde al service fee ($1.00 por pedido).
-              La comisión 2.5% ya fue descontada del vendedor.
+        {/* Estado de deuda */}
+        {wallet.deudaApp>0?(
+          <div className="card" style={{border:"1px solid rgba(255,75,110,.28)",background:"rgba(255,75,110,.05)",marginBottom:10}}>
+            <div className="sec" style={{marginBottom:8,color:"var(--red)"}}>⚠️ Deuda Pendiente con CHANCE</div>
+            <div style={{fontSize:11,color:"var(--muted)",marginBottom:12,lineHeight:1.5}}>
+              Corresponde al service fee ($1.00) de los pedidos cobrados en efectivo. Debes transferirlo vía Yappy a CHANCE y luego confirmar aquí.
             </div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
               <span style={{fontSize:14,color:"var(--text)",fontWeight:700}}>Total a liquidar</span>
-              <span style={{fontFamily:"'Bebas Neue'",fontSize:28,color:"var(--red)",letterSpacing:1}}>{fmt(balance.debtToApp)}</span>
+              <span style={{fontFamily:"'Bebas Neue'",fontSize:36,color:"var(--red)",letterSpacing:1}}>${wallet.deudaApp.toFixed(2)}</span>
             </div>
-            <button className="btn" style={{background:"linear-gradient(135deg,var(--red),#cc2a4e)"}} onClick={settleDebt}>
-              Liquidar {fmt(balance.debtToApp)} vía Yappy
+            <button onClick={()=>setShowLiquidarModal(true)}
+              style={{width:"100%",padding:"13px",borderRadius:12,background:"linear-gradient(135deg,var(--red),#cc2a4e)",border:"none",color:"#fff",fontSize:14,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+              ⚡ Liquidar ${wallet.deudaApp.toFixed(2)} vía Yappy
             </button>
           </div>
         ):(
-          <div className="card" style={{border:"1px solid rgba(0,214,143,.25)",background:"rgba(0,214,143,.06)",textAlign:"center"}}>
-            <div style={{fontSize:32,marginBottom:6}}>✓</div>
+          <div className="card" style={{border:"1px solid rgba(0,214,143,.25)",background:"rgba(0,214,143,.06)",textAlign:"center",marginBottom:10}}>
+            <div style={{fontSize:36,marginBottom:6}}>✅</div>
             <div style={{fontWeight:800,fontSize:14,color:"var(--green)"}}>Sin deudas pendientes</div>
-            <div style={{fontSize:11,color:"var(--muted)",marginTop:3}}>Estás al día con la App</div>
+            <div style={{fontSize:11,color:"var(--muted)",marginTop:3}}>Estás al día con CHANCE</div>
           </div>
         )}
 
+        {/* Historial de transacciones */}
+        <div className="card">
+          <div className="sec" style={{marginBottom:10}}>Historial de Movimientos</div>
+          {(wallet.historia||[]).length===0?(
+            <div style={{textAlign:"center",padding:"16px 0",opacity:.6}}>
+              <div style={{fontSize:11,color:"var(--muted)"}}>Sin movimientos aún</div>
+            </div>
+          ):(wallet.historia||[]).map(tx=>(
+            <div key={tx.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,paddingBottom:10,borderBottom:"1px solid rgba(255,255,255,.04)"}}>
+              <div>
+                <div style={{fontSize:11,fontWeight:700,color:"var(--text)"}}>{tx.desc}</div>
+                <div style={{fontSize:9,color:"var(--muted)",marginTop:1}}>{tx.ts}</div>
+              </div>
+              <div style={{fontFamily:"'Bebas Neue'",fontSize:16,letterSpacing:1,color:tx.tipo==="entrega"||tx.tipo==="ingreso"?"var(--green)":tx.tipo==="liquidacion"?"var(--gold)":"var(--red)"}}>
+                {tx.monto>=0?"+":""}{tx.tipo==="liquidacion"?"liquidado ":""}${Math.abs(tx.monto).toFixed(2)}
+              </div>
+            </div>
+          ))}
+        </div>
+
         {/* Guía de comisiones */}
-        <div className="card" style={{marginTop:4}}>
+        <div className="card" style={{marginTop:8}}>
           <div className="sec" style={{marginBottom:10}}>¿Cómo funciona tu pago?</div>
           {[
-            {icon:"🎟",l:"Delivery fee","d":"100% para ti, siempre",c:"var(--green)"},
-            {icon:"💰",l:"Propinas","d":"100% para ti",c:"var(--green)"},
-            {icon:"📊",l:"Comisión 2.5%","d":"La paga el VENDEDOR (no tú)",c:"var(--gold)"},
-            {icon:"💵",l:"Service fee $1.00","d":"Efectivo: debes a App / Yappy: automático",c:"var(--red)"},
+            {icon:"🎟",l:"Delivery fee",   d:"100% para ti, siempre",                    c:"var(--green)"},
+            {icon:"💰",l:"Propinas",        d:"100% para ti",                              c:"var(--green)"},
+            {icon:"📊",l:"Comisión 2.5%",  d:"La paga el VENDEDOR (no tú)",              c:"var(--gold)"},
+            {icon:"💵",l:"Service fee $1", d:"Efectivo: debes a App / Yappy: automático", c:"var(--red)"},
           ].map(({icon,l,d,c})=>(
             <div key={l} style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:10}}>
               <span style={{fontSize:18,width:26,textAlign:"center",flexShrink:0}}>{icon}</span>
@@ -10872,17 +11167,41 @@ function RegisterScreen({ onRegister, onGoLogin }) {
         photoLicData:  form.photoLic  || null,
       };
       try {
-        const updatedUsers = [...users, newUser];
-        await window.storage.set("users_db", JSON.stringify(updatedUsers));
-        // ── SINCRONIZACIÓN CON FIREBASE ────────────────────────────────────
-        // Subimos también a Firebase (path: users) para que el admin y otros
-        // dispositivos vean al usuario recién registrado. Si Firebase falla,
-        // no es crítico — el usuario quedó guardado localmente.
-        try { await fbWrite("users", stripUserPhotos(updatedUsers)); } catch(fbErr) { console.warn("Firebase users sync failed:", fbErr); }
-      } catch(e) {}
+        // 1. Guardar localmente primero (instantáneo, no depende de red)
+        const localUsers = await window.storage.get("users_db");
+        let currentLocal = [];
+        try {
+          const parsed = JSON.parse(localUsers?.value || "[]");
+          currentLocal = Array.isArray(parsed) ? parsed : Object.values(parsed);
+        } catch(e) {}
+        const updatedLocal = [...currentLocal.filter(u => u?.email !== newUser.email), newUser];
+        await window.storage.set("users_db", JSON.stringify(updatedLocal));
+
+        // 2. Sincronizar con Firebase — CRÍTICO: leer primero lo que hay en Firebase
+        // para NO sobrescribir otros usuarios (Israel, otros registrados desde otros celulares).
+        // El registro de Karen NO debe borrar a Israel ni a nadie.
+        try {
+          let fbUsers = await fbRead("users");
+          if (fbUsers && !Array.isArray(fbUsers) && typeof fbUsers === "object") {
+            fbUsers = Object.values(fbUsers);
+          }
+          if (!Array.isArray(fbUsers)) fbUsers = [];
+          // Merge: quitar la versión vieja del mismo email (si existía) y añadir la nueva
+          const merged = [
+            ...fbUsers.filter(u => u?.email && u.email.toLowerCase() !== newUser.email.toLowerCase()),
+            stripUserPhotos([newUser])[0],
+          ];
+          await fbWrite("users", merged);
+        } catch(fbErr) {
+          console.warn("Firebase users sync failed:", fbErr);
+          // Fallback: al menos escribir solo el nuevo usuario a su propio path
+          try { await fbWrite(`users_by_email/${newUser.id}`, stripUserPhotos([newUser])[0]); } catch(e) {}
+        }
+      } catch(e) {
+        console.warn("Storage save failed:", e);
+      }
       onRegister(newUser);
     } catch(e) {
-      // Storage failed but still proceed — user will be treated as new session
       console.warn("Storage save failed:", e);
     }
     setLoading(false);
@@ -11393,12 +11712,23 @@ function AdminPanel({ adminUser, onLogout }) {
   const toast = (msg) => { setActionFeedback(msg); setTimeout(()=>setActionFeedback(""), 3000); };
 
   const updateUser = async (uid, patch) => {
+    // Actualizar en estado local inmediatamente (UX responsivo)
     const updated = users.map(u => u.id===uid ? {...u,...patch} : u);
     await setUsers(updated);
-    // Sincronizar con Firebase para que el cambio (ej. aprobación) llegue
-    // al usuario en su propio dispositivo
-    try { await fbWrite("users", stripUserPhotos(updated)); } catch(e) { console.warn("FB sync failed:", e); }
     if (selectedUser?.id===uid) setSelectedUser(prev=>({...prev,...patch}));
+    // Sincronizar con Firebase: leer primero para no perder cambios de otros dispositivos
+    try {
+      let fbUsers = await fbRead("users");
+      if (fbUsers && !Array.isArray(fbUsers) && typeof fbUsers === "object") fbUsers = Object.values(fbUsers);
+      if (!Array.isArray(fbUsers)) fbUsers = [];
+      const fbUpdated = fbUsers.map(u => u?.id === uid ? {...u, ...patch} : u);
+      // Si el usuario no estaba en Firebase, añadirlo
+      if (!fbUpdated.find(u => u?.id === uid)) {
+        const localUser = updated.find(u => u?.id === uid);
+        if (localUser) fbUpdated.push(localUser);
+      }
+      await fbWrite("users", stripUserPhotos(fbUpdated));
+    } catch(e) { console.warn("FB sync failed:", e); }
     toast("✅ Usuario actualizado");
   };
 
@@ -11406,8 +11736,13 @@ function AdminPanel({ adminUser, onLogout }) {
     if (!window.confirm("¿Eliminar usuario permanentemente?")) return;
     const updated = users.filter(u=>u.id!==uid);
     await setUsers(updated);
-    try { await fbWrite("users", stripUserPhotos(updated)); } catch(e) { console.warn("FB sync failed:", e); }
     setSelectedUser(null);
+    try {
+      let fbUsers = await fbRead("users");
+      if (fbUsers && !Array.isArray(fbUsers) && typeof fbUsers === "object") fbUsers = Object.values(fbUsers);
+      if (!Array.isArray(fbUsers)) fbUsers = [];
+      await fbWrite("users", stripUserPhotos(fbUsers.filter(u => u?.id !== uid)));
+    } catch(e) { console.warn("FB sync failed:", e); }
     toast("🗑 Usuario eliminado");
   };
 
