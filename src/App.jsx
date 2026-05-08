@@ -406,6 +406,44 @@ function useUbicacionUsuario(userId) {
 const useUbicacionRepartidor = useUbicacionUsuario;
 
 // ═══════════════════════════════════════════════════════════════════════
+// HOOK: useGPSPropio — obtiene la ubicación GPS del dispositivo actual.
+// No la sube a Firebase; solo la usa localmente para calcular distancias.
+// Retorna: { lat, lng, error, loading }
+// ═══════════════════════════════════════════════════════════════════════
+function useGPSPropio() {
+  const [gps, setGps] = useState({ lat: null, lng: null, error: null, loading: true });
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setGps({ lat: null, lng: null, error: "Sin GPS", loading: false });
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setGps({ lat: pos.coords.latitude, lng: pos.coords.longitude, error: null, loading: false }),
+      (err)  => setGps({ lat: null, lng: null, error: err.message, loading: false }),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    );
+  }, []);
+  return gps;
+}
+
+/**
+ * Formatea distancia en km con texto amigable y ETA.
+ * < 1 km → "850 m", >= 1 km → "3.2 km"
+ * ETA basado en moto delivery a 25 km/h en ciudad.
+ */
+function formatDistancia(distKm) {
+  if (distKm == null || isNaN(distKm)) return { dist: "—", time: "—" };
+  const dist = distKm < 1
+    ? `${Math.round(distKm * 1000)} m`
+    : `${distKm.toFixed(1)} km`;
+  const mins = calcularETA(distKm, 25);
+  const time = mins < 60
+    ? `${mins}–${mins + 10} min`
+    : `${Math.floor(mins/60)}h ${mins % 60}min`;
+  return { dist, time };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // COMPONENTE: RepartidorMapa — mapa para el repartidor con sus entregas
 // Muestra:
 //  - Su ubicación actual (GPS en vivo)
@@ -1267,7 +1305,77 @@ function SorteoCountdown({ isoDateStr, color, border }) {
 /* ═══════════════════════════════════════════════════════
    PANTALLA: INICIO  (Comprador)
 ═══════════════════════════════════════════════════════ */
-function ClienteHome({ cart, nav, sharedVendor, activeOrders=[], activeVendors=VENDORS }) {
+function ClienteHome({ cart, nav, sharedVendor, activeOrders=[], activeVendors=VENDORS, authUser=null }) {
+  // Primer nombre del cliente para el saludo (extraído del nombre completo)
+  const primerNombre = (authUser?.nombre || "").trim().split(/\s+/)[0] || "amigo";
+
+  // ── GPS DEL COMPRADOR para calcular distancias REALES a los vendedores ──
+  // Se usa solo localmente (no se sube a Firebase) para ordenar vendedores.
+  const gpsCliente = useGPSPropio();
+
+  // ── VENDEDORES CON DISTANCIA REAL calculada desde el GPS del comprador ──
+  // Para cada vendedor calculamos la distancia Haversine usando:
+  //   - Primero: coords GPS del vendedor desde Firebase /ubicaciones/{userId}
+  //   - Luego:   coords estáticas del VENDOR_COORDS o del perfil del usuario
+  // Si no tenemos GPS del cliente, dejamos la distancia como "—".
+  // Los vendedores se ordenan de más cercano a más lejano.
+  const [vendedoresConDist, setVendedoresConDist] = useState([]);
+
+  useEffect(() => {
+    let active = true;
+    const calcular = async () => {
+      const result = await Promise.all(activeVendors.map(async v => {
+        // Coords del vendedor — prioridad:
+        // 1. GPS en vivo de Firebase /ubicaciones/{userId}
+        // 2. VENDOR_COORDS estático (Carlos V001, Rosa V002)
+        // 3. lat/lng del perfil del usuario (si se capturó al registrarse)
+        let vLat = null, vLng = null;
+        const staticCoords = getVendorCoords(v.id);
+
+        // Intentar leer GPS en vivo del vendedor
+        if (v.userId) {
+          try {
+            const ubic = await fbRead(`ubicaciones/${v.userId}`);
+            if (ubic?.lat && ubic?.lng) {
+              const ageMs = Date.now() - (ubic.timestamp || 0);
+              // GPS fresco (< 2 horas)
+              if (ageMs < 2 * 60 * 60 * 1000) {
+                vLat = ubic.lat;
+                vLng = ubic.lng;
+              }
+            }
+          } catch(e) {}
+        }
+        // Fallback a coords estáticas
+        if (!vLat) { vLat = v.lat || staticCoords.lat; vLng = v.lng || staticCoords.lng; }
+
+        // Calcular distancia si tenemos GPS del cliente
+        let distKm = null;
+        if (gpsCliente.lat && gpsCliente.lng && vLat && vLng) {
+          distKm = calcularDistancia(gpsCliente.lat, gpsCliente.lng, vLat, vLng);
+        }
+
+        const { dist, time } = formatDistancia(distKm);
+        return { ...v, lat: vLat, lng: vLng, distKm, distance: dist, time };
+      }));
+
+      if (active) {
+        // Ordenar: vendedores con distancia conocida primero (más cercano primero),
+        // luego los que no tienen GPS (sin distancia conocida) al final.
+        result.sort((a, b) => {
+          if (a.distKm == null && b.distKm == null) return 0;
+          if (a.distKm == null) return 1;
+          if (b.distKm == null) return -1;
+          return a.distKm - b.distKm;
+        });
+        setVendedoresConDist(result);
+      }
+    };
+    calcular();
+    // Recalcular cada 30s (vendedores pueden moverse)
+    const t = setInterval(calcular, 30000);
+    return () => { active = false; clearInterval(t); };
+  }, [activeVendors, gpsCliente.lat, gpsCliente.lng]);
   const countdown = useCountdown("2026-04-08T15:00:00");
   const [sorteoTab, setSorteoTab] = useState("MIERCOLITO");
   const [, forceRefresh] = useState(0);
@@ -1296,7 +1404,7 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[], activeVendors=V
       {/* Header */}
       <div className="row" style={{justifyContent:"space-between",marginBottom:16}}>
         <div>
-          <div style={{fontSize:11,color:"var(--muted)",fontWeight:500}}>Hola, María 👋</div>
+          <div style={{fontSize:11,color:"var(--muted)",fontWeight:500}}>Hola, {primerNombre} 👋</div>
           <div style={{fontFamily:"'Bebas Neue'",fontSize:28,color:"var(--gold)",letterSpacing:3,lineHeight:1}}>CHANCE</div>
         </div>
         <div className="row" style={{gap:7}}>
@@ -1446,11 +1554,11 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[], activeVendors=V
         <div className="sec" style={{marginBottom:0}}>Vendedores Cercanos</div>
         <button onClick={()=>nav("explorar")} style={{fontSize:11,color:"var(--gold)",fontWeight:700,background:"none",border:"none",cursor:"pointer"}}>Ver todos →</button>
       </div>
-      {activeVendors.map(v=>{
+      {vendedoresConDist.map(v=>{
         // Para Carlos Medina (V001 demo o real), usar sharedVendor que tiene los datos
         // sincronizados (sorteo activo, billetes, chances actualizados).
         const isCarlosMedina = v.id === 1 || v.id === "V001";
-        const vendorData = (isCarlosMedina && sharedVendor) ? { ...v, ...sharedVendor } : v;
+        const vendorData = (isCarlosMedina && sharedVendor) ? { ...v, ...sharedVendor, distance: v.distance, time: v.time } : v;
         return (
         <div key={v.id} className="card" style={{cursor:"pointer"}} onClick={()=>nav({screen:"tablero",vendor:vendorData})}>
           <div className="row" style={{justifyContent:"space-between",marginBottom:7}}>
@@ -1635,11 +1743,48 @@ function ExplorarScreen({ nav, sharedVendor, activeVendors=VENDORS }) {
   const [q, setQ] = useState("");
   const [sorteoF, setSorteoF] = useState("todos");
 
-  // sorteos únicos de los vendedores
-  const allSorteos = [...new Set(activeVendors.map(v => v.sorteoData?.tipo || v.sorteo))];
+  // GPS del comprador para distancias reales y orden por cercanía
+  const gpsCliente = useGPSPropio();
+  const [vendedoresConDist, setVendedoresConDist] = useState(activeVendors);
 
-  const filtered = activeVendors.filter(v => {
-    // El código del vendedor puede ser numérico (1, 2 demo) o string (V003, V004 reales)
+  useEffect(() => {
+    let active = true;
+    const calcular = async () => {
+      const result = await Promise.all(activeVendors.map(async v => {
+        let vLat = null, vLng = null;
+        const sc = getVendorCoords(v.id);
+        if (v.userId) {
+          try {
+            const ubic = await fbRead(`ubicaciones/${v.userId}`);
+            if (ubic?.lat && ubic?.lng && (Date.now() - (ubic.timestamp||0)) < 7200000) {
+              vLat = ubic.lat; vLng = ubic.lng;
+            }
+          } catch(e) {}
+        }
+        if (!vLat) { vLat = v.lat || sc.lat; vLng = v.lng || sc.lng; }
+        const distKm = (gpsCliente.lat && gpsCliente.lng && vLat && vLng)
+          ? calcularDistancia(gpsCliente.lat, gpsCliente.lng, vLat, vLng) : null;
+        const { dist, time } = formatDistancia(distKm);
+        return { ...v, lat: vLat, lng: vLng, distKm, distance: dist, time };
+      }));
+      if (active) {
+        result.sort((a, b) => {
+          if (a.distKm == null && b.distKm == null) return 0;
+          if (a.distKm == null) return 1;
+          if (b.distKm == null) return -1;
+          return a.distKm - b.distKm;
+        });
+        setVendedoresConDist(result);
+      }
+    };
+    calcular();
+    return () => { active = false; };
+  }, [activeVendors, gpsCliente.lat, gpsCliente.lng]);
+
+  // sorteos únicos de los vendedores
+  const allSorteos = [...new Set(vendedoresConDist.map(v => v.sorteoData?.tipo || v.sorteo))];
+
+  const filtered = vendedoresConDist.filter(v => {
     const codigo = typeof v.id === "string" ? v.id : `V${String(v.id).padStart(3,"0")}`;
     const matchQ = !q.trim() ||
       v.name.toLowerCase().includes(q.toLowerCase()) ||
@@ -2217,7 +2362,7 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
     {id:"efectivo",icon:"💵",l:"Efectivo",sub:"El repartidor trae cambio"},
     {id:"yappy",   icon:"📱",l:"Yappy · Banco General",sub:"Pago QR — sin comisión bancaria"},
   ];
-  const place=()=>{
+  const place=async ()=>{
     // Construir dirección final con coordenadas GPS si aplica
     const direccionFinal = usarGPS && ubicGPS ? {
       ...addr,
@@ -2241,11 +2386,17 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
       label: deliveryLabel,
     };
 
-    const orderId = onConfirm
-      ? onConfirm(cart, pay==="yappy"?"YAPPY":"CASH", direccionFinal, deliveryMeta)
-      : `CH-${2408+Math.floor(Math.random()*99)}`;
+    let orderId;
+    try {
+      orderId = onConfirm
+        ? await onConfirm(cart, pay==="yappy"?"YAPPY":"CASH", direccionFinal, deliveryMeta)
+        : `CH-${2408+Math.floor(Math.random()*99)}`;
+    } catch (err) {
+      console.error("Error creando pedido:", err);
+      orderId = `CH-${2408+Math.floor(Math.random()*99)}`;
+    }
     setCart([]);
-    nav({screen:"confirmacion", orderId: orderId||`CH-${Math.floor(Math.random()*9000+1000)}`});
+    nav({screen:"confirmacion", orderId: orderId || `CH-${Math.floor(Math.random()*9000+1000)}`});
   };
 
   return (
@@ -2699,19 +2850,22 @@ function TrackingScreen({ order }) {
         )}
       </div>
       {/* Tarjeta del Repartidor: SOLO visible cuando está asignado (EN_CAMINO o ENTREGADO) */}
-      {repartidorActivo && (
-      <div className="card" style={{marginBottom:10}}>
-        <div style={{fontSize:9,color:"var(--muted)",fontWeight:800,letterSpacing:1.5,marginBottom:6}}>REPARTIDOR ASIGNADO</div>
-        <div className="row" style={{justifyContent:"space-between",marginBottom:9}}>
-          <div className="row" style={{gap:9}}>
-            <div style={{width:40,height:40,borderRadius:11,background:"rgba(59,158,255,.1)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Bebas Neue'",fontSize:13,color:"var(--blue)",flexShrink:0}}>JR</div>
-            <div>
-              <div style={{fontWeight:800,fontSize:13,color:"var(--text)"}}>Juan Rodríguez <span className="badge bg" style={{fontSize:8}}>✅</span></div>
-              <div style={{fontSize:10,color:"var(--muted)"}}>⭐ 4.8 · 342 entregas</div>
-              <div style={{fontSize:10,color:"var(--blue)",fontWeight:700,marginTop:2}}>📞 6333-4444</div>
+      {repartidorActivo && (() => {
+        const repName  = order?.assignedRepartidorName || "Juan Rodríguez";
+        const repInit  = repName.split(/\s+/).map(p=>p[0]||"").join("").slice(0,2).toUpperCase() || "JR";
+        return (
+        <div className="card" style={{marginBottom:10}}>
+          <div style={{fontSize:9,color:"var(--muted)",fontWeight:800,letterSpacing:1.5,marginBottom:6}}>REPARTIDOR ASIGNADO</div>
+          <div className="row" style={{justifyContent:"space-between",marginBottom:9}}>
+            <div className="row" style={{gap:9}}>
+              <div style={{width:40,height:40,borderRadius:11,background:"rgba(59,158,255,.1)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Bebas Neue'",fontSize:13,color:"var(--blue)",flexShrink:0}}>{repInit}</div>
+              <div>
+                <div style={{fontWeight:800,fontSize:13,color:"var(--text)"}}>{repName} <span className="badge bg" style={{fontSize:8}}>✅</span></div>
+                <div style={{fontSize:10,color:"var(--muted)"}}>⭐ 4.8 · {(order?.deliveriesCount||342)} entregas</div>
+                <div style={{fontSize:10,color:"var(--blue)",fontWeight:700,marginTop:2}}>📞 {order?.assignedRepartidorPhone || "6333-4444"}</div>
+              </div>
             </div>
           </div>
-        </div>
         {/* Botones de comunicación */}
         {order?.status==="EN_CAMINO"&&(
           <div style={{display:"flex",gap:6,marginTop:6}}>
@@ -2726,8 +2880,9 @@ function TrackingScreen({ order }) {
             </a>
           </div>
         )}
-      </div>
-      )}
+        </div>
+        );
+      })()}
       {/* Mensaje informativo: cambia según fase */}
       {!repartidorEnCamino && order && (
       <div className="card" style={{marginBottom:10, background: repartidorAsignado ? "rgba(59,158,255,.06)" : "rgba(244,196,48,.06)", border: `1px solid ${repartidorAsignado ? "rgba(59,158,255,.25)" : "rgba(244,196,48,.2)"}`}}>
@@ -8268,19 +8423,61 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
     const bId = parseInt((b.id||'').replace(/\D/g,''))||0;
     return bId - aId;
   };
-  // Cada repartidor solo ve los pedidos que le fueron asignados específicamente,
-  // los pendientes (que cualquiera puede tomar), y los suyos ya en camino/entregados.
-  // Backward-compat: pedidos sin assignedRepartidorId se asumen como Juan.
+
+  // ── GPS EN TIEMPO REAL DEL REPARTIDOR (para ordenar pedidos por cercanía) ──
+  const [miUbicacion, setMiUbicacion] = useState(null);
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    // watchPosition para actualizar continuamente mientras la app está abierta
+    const wid = navigator.geolocation.watchPosition(
+      pos => setMiUbicacion({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 10000 }
+    );
+    return () => navigator.geolocation.clearWatch(wid);
+  }, []);
+
+  // ── FUNCIÓN: distancia del repartidor al punto de recogida (vendedor) ──
+  const distToPickup = (o) => {
+    if (!miUbicacion) return null;
+    const sc = getVendorCoords(o.vendorId || "V001");
+    const vLat = o.vendorLat || sc.lat;
+    const vLng = o.vendorLng || sc.lng;
+    return calcularDistancia(miUbicacion.lat, miUbicacion.lng, vLat, vLng);
+  };
+
+  const distToDropoff = (o) => {
+    if (!miUbicacion) return null;
+    const cLat = o.deliveryAddress?.lat || 8.9824;
+    const cLng = o.deliveryAddress?.lng || -79.5199;
+    return calcularDistancia(miUbicacion.lat, miUbicacion.lng, cLat, cLng);
+  };
+
+  // Ordenar por distancia al punto de RECOGIDA (APROBADOS) o ENTREGA (EN_CAMINO)
+  // Si no hay GPS, ordenar por fecha (más recientes primero).
+  const sortByDist = (arr, distFn) => [...arr].sort((a, b) => {
+    const da = distFn(a), db = distFn(b);
+    if (da == null && db == null) return sortNewR(a, b);
+    if (da == null) return 1;
+    if (db == null) return -1;
+    return da - db;
+  });
+
   const esMioR = o => {
     const asignado = o.assignedRepartidorId || (o.status === "APROBADO" || o.status === "PENDIENTE" ? null : "repartidor_juan");
     return !asignado || asignado === repartidorUserId;
   };
   const myOrders        = orders.filter(esMioR);
-  const approvedOrders  = myOrders.filter(o=>o.status==="APROBADO").sort(sortNewR);
-  const inTransitOrders = myOrders.filter(o=>o.status==="EN_CAMINO").sort(sortNewR);
+  // APROBADOS: ordenados por distancia al VENDEDOR (más cercano primero)
+  const approvedOrders  = sortByDist(myOrders.filter(o=>o.status==="APROBADO"), distToPickup);
+  // EN_CAMINO: ordenados por distancia al CLIENTE
+  const inTransitOrders = sortByDist(myOrders.filter(o=>o.status==="EN_CAMINO"), distToDropoff);
   const deliveredOrders = myOrders.filter(o=>o.status==="ENTREGADO").sort(sortNewR);
-  // Pedidos PENDIENTES: el repartidor los ve para saber que están en cola, pero no puede iniciarlos
-  const pendingOrders   = orders.filter(o=>["PENDIENTE","MODIFICADO","REEMPLAZO"].includes(o.status)).sort(sortNewR);
+  // PENDIENTES: todos los que cualquier repartidor puede tomar, por distancia al vendedor
+  const pendingOrders   = sortByDist(
+    orders.filter(o=>["PENDIENTE","MODIFICADO","REEMPLAZO"].includes(o.status)),
+    distToPickup
+  );
 
   // ─── TRACKING GPS EN VIVO ───
   // Se activa automáticamente cuando el repartidor tiene al menos 1 entrega EN_CAMINO
@@ -8426,7 +8623,7 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
         <div className="row" style={{justifyContent:"space-between",marginBottom:12}}>
           <div>
             <div style={{fontSize:10,color:"var(--muted)"}}>Repartidor</div>
-            <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:"var(--gold)",letterSpacing:2}}>JUAN RODRÍGUEZ</div>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:"var(--gold)",letterSpacing:2,textTransform:"uppercase"}}>{repartidorName}</div>
           </div>
           <span className="badge bg">● Online</span>
         </div>
@@ -8643,6 +8840,23 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
                   {cf&&<div><div style={{fontSize:8,color:"var(--muted)",fontWeight:700}}>Debes App</div><div style={{fontSize:13,fontWeight:800,color:"var(--red)"}}>${cf.debtToApp}</div></div>}
                   <div><div style={{fontSize:8,color:"var(--muted)",fontWeight:700}}>Método</div><div style={{fontSize:10,fontWeight:700,color:"var(--text)"}}>{o.paymentMethod==="YAPPY"?"📱 Yappy":"💵 Efectivo"}</div></div>
                 </div>
+                {/* Distancias en tiempo real desde el GPS del repartidor */}
+                {miUbicacion && (() => {
+                  const dp = distToPickup(o);
+                  const dd = distToDropoff(o);
+                  const { dist: dDist, time: dTime } = formatDistancia(dp);
+                  const { dist: cDist, time: cTime } = formatDistancia(dd);
+                  return (
+                    <div style={{marginTop:6,display:"flex",gap:10,flexWrap:"wrap"}}>
+                      <div style={{background:"rgba(244,196,48,.07)",borderRadius:7,padding:"4px 8px",fontSize:9,color:"var(--gold)",fontWeight:700}}>
+                        🏪 Vendedor: {dDist} · ~{dTime}
+                      </div>
+                      <div style={{background:"rgba(59,158,255,.07)",borderRadius:7,padding:"4px 8px",fontSize:9,color:"var(--blue)",fontWeight:700}}>
+                        🏠 Cliente: {cDist} · ~{cTime}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="row" style={{gap:7,justifyContent:"flex-end",flexWrap:"wrap"}}>
@@ -9618,8 +9832,9 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       pickupStarted: true,
       pickupStartedAt: ts(),
       pickupStartedAtMs: Date.now(),
-      assignedRepartidorId: authUser?.id || "repartidor_juan", // ID real del repartidor logueado
+      assignedRepartidorId: authUser?.id || "repartidor_juan",
       assignedRepartidorName: authUser?.nombre || "Juan Rodríguez",
+      assignedRepartidorPhone: authUser?.telefono || "6333-4444",
       history: [...(o.history||[]), { by: "repartidor", action: `${authUser?.nombre||"Juan Rodríguez"} inició recogida`, at: ts() }],
     };
   }));
@@ -9794,7 +10009,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
     if(phase==="roles")  return <RoleSelect onSelect={selectRole}/>;
     switch(screen){
       // ── CLIENTE
-      case "home_cliente": return <ClienteHome cart={cart} nav={nav}
+      case "home_cliente": return <ClienteHome cart={cart} nav={nav} authUser={authUser}
         sharedVendor={sharedVendor} activeVendors={activeVendors}
         activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
       case "buscar":       return <BuscarScreen nav={nav} sharedVendor={sharedVendor} activeVendors={activeVendors}/>;
@@ -9883,7 +10098,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       default:
         if (role==="vendedor")   return <VendedorHome   authUser={authUser} billetes={sharedBilletes} setBilletes={setSharedBilletes} chances={sharedChances} setChances={setSharedChances} orders={sharedOrders} onApprove={approveOrder} onModify={modifyOrderWithSound} onApproveReplacement={vendorApproveReplacementWithSound} onRejectReplacement={vendorRejectReplacementWithSound} onCancelByVendor={vendorCancelOrder} activeSorteo={vendorActiveSorteo} setActiveSorteo={setVendorActiveSorteo} initTab="tablero"/>;
         if (role==="repartidor") return <RepartidorHome authUser={authUser} orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
-        return <ClienteHome cart={cart} nav={nav} sharedVendor={sharedVendor} activeVendors={activeVendors} activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
+        return <ClienteHome cart={cart} nav={nav} authUser={authUser} sharedVendor={sharedVendor} activeVendors={activeVendors} activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
     }
   };
 
@@ -11975,17 +12190,23 @@ export default function ChanceRoot() {
         const myBilletes = (sharedBilletes || []).filter(b => b.vendorOwnerId === u.id);
         const myChances  = (sharedChances  || []).filter(c => c.vendorOwnerId === u.id);
         return {
-          id: codigo,                          // ej "V003" — único y estable
+          id: codigo,
           name: nombreCompleto,
           rating: 5.0, reviews: 0,
           zone: u.lugarVende || u.corregimiento || "Panamá",
-          distance: "—", time: "20–35 min",
+          // distance y time son placeholders — las pantallas los recalculan
+          // usando Haversine con el GPS real del comprador/repartidor.
+          distance: "—", time: "—",
           verified: true,
           sorteo: vendorActiveSorteo?.fecha || "",
           billetes: myBilletes,
           chances:  myChances,
-          // Identidad para el motor de pedidos
           userId: u.id, telefono: u.telefono,
+          // Coordenadas para cálculo de distancias. Se usarán lat/lng del GPS
+          // del vendedor (Firebase /ubicaciones/{userId}) si está disponible;
+          // las que vienen aquí son del registro (menos precisas pero útiles).
+          lat: u.lat || null,
+          lng: u.lng || null,
         };
       });
     // Demos VENDORS al frente, después los reales (filtrando duplicados por id)
@@ -12010,16 +12231,22 @@ export default function ChanceRoot() {
     // 1. Cargar datos iniciales desde Firebase
     (async () => {
       try {
-        const [pedidos, billetes, chances] = await Promise.all([
+        let [pedidos, billetes, chances] = await Promise.all([
           fbRead("pedidos"),
           fbRead("billetes"),
           fbRead("chances"),
         ]);
-        if (Array.isArray(pedidos)) {
+        // Firebase puede devolver objeto en lugar de array — normalizar
+        const toArr = (d) => {
+          if (Array.isArray(d)) return d;
+          if (d && typeof d === "object") return Object.values(d);
+          return [];
+        };
+        pedidos  = toArr(pedidos).filter(o => o && typeof o === "object" && o.id);
+        billetes = toArr(billetes).filter(b => b && typeof b === "object" && b.n);
+        chances  = toArr(chances).filter(c => c && typeof c === "object" && c.n);
+        if (pedidos.length > 0) {
           // ─── AUTO-CORRECCIÓN: pedidos con estado inconsistente ───
-          // Si un pedido está EN_CAMINO/ENTREGADO pero NO tiene approvedAt,
-          // significa que pasó por aprobación antes de las validaciones nuevas.
-          // Lo regresamos a PENDIENTE para forzar el flujo correcto.
           const pedidosCorregidos = pedidos.map(p => {
             if ((p.status === "EN_CAMINO" || p.status === "ENTREGADO") && !p.approvedAt && !p.vendorApprovedAt) {
               return {
@@ -12034,17 +12261,16 @@ export default function ChanceRoot() {
           });
           setSharedOrders(pedidosCorregidos);
           ordersHashRef.current = JSON.stringify(pedidosCorregidos);
-          // Si hubo correcciones, subir cambios a Firebase
           if (JSON.stringify(pedidosCorregidos) !== JSON.stringify(pedidos)) {
             console.log("⚠️ Pedidos auto-corregidos por estados inválidos");
             fbWrite("pedidos", pedidosCorregidos);
           }
         }
-        if (Array.isArray(billetes)) {
+        if (billetes.length > 0) {
           setSharedBilletes(billetes);
           billetesHashRef.current = JSON.stringify(billetes);
         }
-        if (Array.isArray(chances)) {
+        if (chances.length > 0) {
           setSharedChances(chances);
           chancesHashRef.current = JSON.stringify(chances);
         }
@@ -12080,31 +12306,51 @@ export default function ChanceRoot() {
 
     // 2. Listener en tiempo real para PEDIDOS (poll cada 3s)
     const stopPedidos = fbListen("pedidos", (data) => {
-      const newHash = JSON.stringify(data || []);
+      // Firebase a veces convierte arrays a objetos {0:o, 1:o,...}. Convertir.
+      let arr = data;
+      if (arr && !Array.isArray(arr) && typeof arr === "object") {
+        arr = Object.values(arr);
+      }
+      if (!Array.isArray(arr)) arr = [];
+      // Filtrar items vacíos (null/undefined que aparecen cuando se borra un índice)
+      arr = arr.filter(o => o && typeof o === "object" && o.id);
+      const newHash = JSON.stringify(arr);
       if (newHash !== ordersHashRef.current) {
         ordersHashRef.current = newHash;
         skipNextSyncRef.current.orders = true; // evita loop al recibir
-        setSharedOrders(Array.isArray(data) ? data : []);
+        setSharedOrders(arr);
       }
     }, 3000);
 
     // 3. Listener para BILLETES (inventario)
     const stopBilletes = fbListen("billetes", (data) => {
-      const newHash = JSON.stringify(data || []);
+      let arr = data;
+      if (arr && !Array.isArray(arr) && typeof arr === "object") {
+        arr = Object.values(arr);
+      }
+      if (!Array.isArray(arr)) arr = [];
+      arr = arr.filter(b => b && typeof b === "object" && b.n);
+      const newHash = JSON.stringify(arr);
       if (newHash !== billetesHashRef.current) {
         billetesHashRef.current = newHash;
         skipNextSyncRef.current.billetes = true;
-        if (Array.isArray(data)) setSharedBilletes(data);
+        setSharedBilletes(arr);
       }
     }, 3000);
 
     // 4. Listener para CHANCES (inventario)
     const stopChances = fbListen("chances", (data) => {
-      const newHash = JSON.stringify(data || []);
+      let arr = data;
+      if (arr && !Array.isArray(arr) && typeof arr === "object") {
+        arr = Object.values(arr);
+      }
+      if (!Array.isArray(arr)) arr = [];
+      arr = arr.filter(c => c && typeof c === "object" && c.n);
+      const newHash = JSON.stringify(arr);
       if (newHash !== chancesHashRef.current) {
         chancesHashRef.current = newHash;
         skipNextSyncRef.current.chances = true;
-        if (Array.isArray(data)) setSharedChances(data);
+        setSharedChances(arr);
       }
     }, 3000);
 
