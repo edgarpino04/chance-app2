@@ -410,6 +410,8 @@ const useUbicacionRepartidor = useUbicacionUsuario;
 // Muestra:
 //  - Su ubicación actual (GPS en vivo)
 //  - Pins de cada cliente a entregar
+//  - En fase pickup: vendedor + cliente + ruta planificada (su recorrido)
+//  - En fase en-camino: solo cliente (ya recogió)
 // ═══════════════════════════════════════════════════════════════════════
 function RepartidorMapa({ orders = [], repartidorId = "repartidor_juan" }) {
   const ubicMia = useUbicacionRepartidor(repartidorId);
@@ -417,35 +419,60 @@ function RepartidorMapa({ orders = [], repartidorId = "repartidor_juan" }) {
   const center = ubicMia ? [ubicMia.lat, ubicMia.lng] : [8.9824, -79.5199];
 
   const markers = [];
+  // Lista de puntos para dibujar la ruta sugerida (mi posición → vendedor → cliente)
+  const routePoints = [];
+
   // Mi ubicación
   if (ubicMia && ubicMia.activo) {
     markers.push({
       type: 'repartidor', lat: ubicMia.lat, lng: ubicMia.lng,
       label: 'Tú estás aquí', popup: `<b>🛵 Tu ubicación</b><br/>Velocidad: ${ubicMia.velocidad || 0} km/h`
     });
+    routePoints.push([ubicMia.lat, ubicMia.lng]);
   }
-  // Para CADA entrega activa, mostrar el lugar correcto según fase:
-  //   - APROBADO (pickup): mostrar ubicación EXACTA del vendedor (donde recoger)
-  //   - EN_CAMINO (dropoff): mostrar ubicación EXACTA del cliente (donde entregar)
+
+  // Para CADA entrega activa, mostrar el recorrido visible:
+  //   - APROBADO (pickup): mostrar VENDEDOR (recoger) + CLIENTE (entregar)
+  //                        → el repartidor ve el recorrido completo planeado
+  //   - EN_CAMINO (dropoff): mostrar SOLO CLIENTE (ya recogió, va a entregar)
   orders.forEach((o, i) => {
+    // Coords del vendedor: prioridad GPS guardado en orden > coords static
+    const vStatic = getVendorCoords(o.vendorId || "V001");
+    const vLat = o.vendorLat || vStatic.lat;
+    const vLng = o.vendorLng || vStatic.lng;
+    const vName = vStatic.name;
+    // Coords del cliente
+    const cLat = o.deliveryAddress?.lat || o.coordinates?.lat || (8.9824 + (i * 0.005));
+    const cLng = o.deliveryAddress?.lng || o.coordinates?.lng || (-79.5199 + (i * 0.005));
+
     if (o.status === "APROBADO") {
-      // FASE PICKUP: pin en el vendedor (el repartidor va a recoger)
-      const v = getVendorCoords(o.vendorId || "V001");
+      // FASE PICKUP: mostrar AMBOS puntos (vendedor + cliente) + ruta
       markers.push({
-        type: 'vendedor', lat: v.lat, lng: v.lng,
-        label: o.id,
-        popup: `<b>🏪 ${v.name}</b><br/>${v.address}<br/><b>Pedido ${o.id}</b>`
+        type: 'vendedor', lat: vLat, lng: vLng,
+        label: `Recoger ${o.id}`,
+        popup: `<b>🏪 ${vName}</b><br/>${vStatic.address}<br/><b>1️⃣ Recoger ${o.id}</b>`
       });
+      markers.push({
+        type: 'casa', lat: cLat, lng: cLng,
+        label: `Entregar ${o.id}`,
+        popup: `<b>📦 Entregar ${o.id}</b><br/>${o.deliveryAddress?.text || 'Cliente'}<br/><b>2️⃣ Destino final</b>`
+      });
+      // Ruta planeada: mi posición → vendedor → cliente
+      routePoints.push([vLat, vLng]);
+      routePoints.push([cLat, cLng]);
     } else {
-      // FASE DROPOFF u otros estados: pin en el cliente
-      const lat = o.deliveryAddress?.lat || o.coordinates?.lat || (8.9824 + (i * 0.005));
-      const lng = o.deliveryAddress?.lng || o.coordinates?.lng || (-79.5199 + (i * 0.005));
+      // FASE DROPOFF (EN_CAMINO): solo cliente (ya recogió del vendedor)
       markers.push({
-        type: 'casa', lat, lng,
-        label: o.id, popup: `<b>📦 ${o.id}</b><br/>${o.deliveryAddress?.text || 'Cliente'}<br/><b>$${o.lotteryValue || '0'}</b>`
+        type: 'casa', lat: cLat, lng: cLng,
+        label: o.id,
+        popup: `<b>📦 ${o.id}</b><br/>${o.deliveryAddress?.text || 'Cliente'}<br/><b>$${o.lotteryValue || '0'}</b>`
       });
+      routePoints.push([cLat, cLng]);
     }
   });
+
+  // Solo dibujar ruta si hay al menos 2 puntos (origen + destino)
+  const route = routePoints.length >= 2 ? routePoints : null;
 
   return (
     <div style={{position:"relative", marginBottom:12}}>
@@ -567,6 +594,58 @@ const SORTEOS_RECIENTES_SEED = [
 // Variable MUTABLE que usa el resto de la app
 // Por defecto usa los datos seed, pero se actualiza con los datos del Worker al cargar
 let SORTEOS_RECIENTES = [...SORTEOS_RECIENTES_SEED];
+
+/**
+ * Devuelve la fecha del PRÓXIMO sorteo basado en la fecha del último jugado.
+ * Ejemplo: si el último Miercolito fue 6 de mayo, el próximo es 13 de mayo.
+ * @param {object} sorteo - Item de SORTEOS_RECIENTES
+ * @returns {string} fecha formateada en español "10 de mayo de 2026"
+ */
+function getProximaFecha(sorteo) {
+  if (!sorteo) return "";
+  // Si proximoISO existe, lo usamos como fuente de verdad
+  if (sorteo.proximoISO) {
+    const d = new Date(sorteo.proximoISO);
+    if (!isNaN(d.getTime())) {
+      const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+      return `${d.getDate()} de ${meses[d.getMonth()]} de ${d.getFullYear()}`;
+    }
+  }
+  // Si no, sumamos 7 días al último (DOMINICAL/MIERCOLITO) o usamos genérico
+  return sorteo.fecha || "";
+}
+
+/**
+ * Devuelve el número estimado del PRÓXIMO sorteo (último + 1).
+ * @param {object} sorteo - Item de SORTEOS_RECIENTES
+ * @returns {string} número del próximo sorteo
+ */
+function getProximoSorteoN(sorteo) {
+  if (!sorteo?.sorteoN) return "";
+  const n = parseInt(sorteo.sorteoN, 10);
+  if (isNaN(n)) return sorteo.sorteoN;
+  return String(n + 1);
+}
+
+/**
+ * Devuelve el sorteo activo (PRÓXIMO sorteo) con datos actualizados.
+ * El vendedor vende para el próximo sorteo, no para el último jugado.
+ * @param {string} tipo - "MIERCOLITO" | "DOMINICAL" | "GORDITO" | "EXTRAORDINARIA"
+ * @returns {object} sorteo activo con fecha del próximo
+ */
+function getSorteoActivo(tipo) {
+  const ultimo = SORTEOS_RECIENTES.find(s => s.tipo === tipo);
+  if (!ultimo) return null;
+  return {
+    ...ultimo,
+    sorteoN: getProximoSorteoN(ultimo),  // próximo número
+    fecha:   getProximaFecha(ultimo),     // próxima fecha
+    fechaUltimo:   ultimo.fecha,           // referencia al último (para histórico)
+    sorteoNUltimo: ultimo.sorteoN,         // número del último (para histórico)
+    premiosUltimo: ultimo.premios,         // resultados del último (para Resultados)
+    esProximo: true,                       // marca: este es el próximo, no el pasado
+  };
+}
 
 /* Vendedores con inventario */
 const VENDORS = [
@@ -1651,10 +1730,26 @@ function ExplorarScreen({ nav, sharedVendor, activeVendors=VENDORS }) {
 /* ═══════════════════════════════════════════════════════
    TABLERO  — Chances van de 5 en 5
 ═══════════════════════════════════════════════════════ */
-function TableroScreen({ vendor, cart, setCart, nav }) {
+function TableroScreen({ vendor, cart, setCart, nav, vendorActiveSorteo=null }) {
   const [tab, setTab] = useState("billetes");
   const [selected, setSelected] = useState(null);
   const [qty, setQty] = useState(1);
+  // Cada vendedor tiene su propio path en Firebase con su sorteo activo.
+  // El comprador lee ese path para ver SOLO los billetes del sorteo activo
+  // de ESE vendedor (no del global de Carlos Medina).
+  const [vendorOwnSorteo, setVendorOwnSorteo] = useState(null);
+  useEffect(() => {
+    const code = typeof vendor.id === "string" ? vendor.id : `V${String(vendor.id).padStart(3,"0")}`;
+    let active = true;
+    (async () => {
+      try {
+        const data = await fbRead(`vendedor_${code}/sorteoActivo`);
+        if (active && data && data.tipo) setVendorOwnSorteo(data);
+      } catch(e) { /* sin GPS, usar default */ }
+    })();
+    return () => { active = false; };
+  }, [vendor.id]);
+
   const totalCartQty = cart.reduce((a,i)=>a+i.qty,0);
   const getAvail = item => item.stock - item.sold;
 
@@ -1695,7 +1790,10 @@ function TableroScreen({ vendor, cart, setCart, nav }) {
   // Filtrar por sorteo activo del vendedor: solo se muestran al comprador los
   // billetes/chances asociados al mismo sorteo. Items legacy sin sorteoTipo
   // se consideran disponibles para cualquier sorteo (compatibilidad).
-  const sorteoTipoActivoVendor = vendor.sorteoData?.tipo || "MIERCOLITO";
+  // Prioridad: 1) sorteo del vendor leído directo de su path Firebase,
+  // 2) sorteoData del vendor (demos), 3) vendorActiveSorteo del root,
+  // 4) MIERCOLITO como default.
+  const sorteoTipoActivoVendor = vendorOwnSorteo?.tipo || vendor.sorteoData?.tipo || vendorActiveSorteo?.tipo || "MIERCOLITO";
   const billetesFiltrados = (vendor.billetes||[]).filter(b => !b.sorteoTipo || b.sorteoTipo === sorteoTipoActivoVendor);
   const chancesFiltrados  = (vendor.chances ||[]).filter(c => !c.sorteoTipo || c.sorteoTipo === sorteoTipoActivoVendor);
   const items = tab==="billetes"?billetesFiltrados:chancesFiltrados;
@@ -6642,7 +6740,11 @@ function VendedorHome({ authUser=null, billetes=[], setBilletes, chances=[], set
 
   // ── SORTEO ACTIVO DEL VENDEDOR ────────────────────────────────────────────
   // (Se declara temprano porque handleAdd y los filtros del tablero lo necesitan)
-  const SORTEOS_VENDEDOR = SORTEOS_RECIENTES.filter(s=>["MIERCOLITO","DOMINICAL","GORDITO","EXTRAORDINARIA"].includes(s.tipo));
+  // SORTEOS_VENDEDOR ahora usa los sorteos PRÓXIMOS (no los pasados).
+  // El vendedor vende para el sorteo que ESTÁ POR JUGAR, no para uno ya celebrado.
+  const SORTEOS_VENDEDOR = ["MIERCOLITO","DOMINICAL","GORDITO","EXTRAORDINARIA"]
+    .map(t => getSorteoActivo(t))
+    .filter(Boolean);
   const [localSorteo, setLocalSorteo] = useState(SORTEOS_VENDEDOR[0]);
   const activeSorteo    = propActiveSorteo    || localSorteo;
   const setActiveSorteo = propSetActiveSorteo || setLocalSorteo;
@@ -6653,6 +6755,89 @@ function VendedorHome({ authUser=null, billetes=[], setBilletes, chances=[], set
   // (no la zona estática hardcoded). Si el navegador no tiene permiso GPS,
   // el comprador verá las coords aproximadas del corregimiento del perfil.
   useTrackingUbicacion(vendorUserId, true);
+
+  // ─── SINCRONIZACIÓN DEL SORTEO ACTIVO POR VENDEDOR ───
+  // Cada vendedor publica su sorteo activo en su propio path Firebase.
+  // Esto permite que cada comprador, al entrar al tablero de un vendedor
+  // específico, lea SOLO el sorteo activo de ESE vendedor (no el global).
+  const lastSorteoSyncRef = useRef(null);
+  useEffect(() => {
+    if (!vendorCode || !activeSorteo?.tipo) return;
+    const payload = {
+      tipo: activeSorteo.tipo,
+      sorteoN: activeSorteo.sorteoN || "",
+      fecha: activeSorteo.fecha || "",
+      at: Date.now(),
+    };
+    const key = JSON.stringify({tipo: payload.tipo, sorteoN: payload.sorteoN});
+    if (key === lastSorteoSyncRef.current) return;
+    lastSorteoSyncRef.current = key;
+    fbWrite(`vendedor_${vendorCode}/sorteoActivo`, payload);
+  }, [vendorCode, activeSorteo?.tipo, activeSorteo?.sorteoN]);
+
+  // ─── AUTO-CLEAR DEL TABLERO AL PASAR LA HORA TOPE ───
+  // Lee la configuración del admin (hora tope, ej "15:00"). Si la hora actual
+  // ya cruzó esa hora HOY, y todavía hay inventario marcado como del sorteo
+  // que ya jugó, lo borra para que el vendedor pueda ingresar el nuevo.
+  const [cierreCfg, setCierreCfg] = useState({ horaTope: "15:00", activo: true });
+  useEffect(() => {
+    let active = true;
+    const cargar = async () => {
+      try {
+        const cfg = await fbRead("admin_cfg");
+        if (active && cfg) {
+          setCierreCfg({
+            horaTope: cfg.cierreHoraTope || "15:00",
+            activo:   cfg.cierreActivo !== false,
+          });
+        }
+      } catch(e) {}
+    };
+    cargar();
+    const t = setInterval(cargar, 60000); // refrescar cada minuto
+    return () => { active = false; clearInterval(t); };
+  }, []);
+
+  // Detectar si ya pasó la hora tope HOY y si el último auto-clear fue ayer
+  const ultimoClearKey = `chance_last_clear_${vendorCode}`;
+  useEffect(() => {
+    if (!cierreCfg.activo) return;
+    if (!setBilletes || !setChances) return;
+    const checkClear = async () => {
+      const ahora = new Date();
+      const [hh, mm] = (cierreCfg.horaTope || "15:00").split(":").map(Number);
+      const horaTopeMs = new Date(ahora);
+      horaTopeMs.setHours(hh, mm, 0, 0);
+      // Solo limpiar si: 1) ya pasó la hora tope HOY, 2) no hemos limpiado hoy
+      if (ahora.getTime() < horaTopeMs.getTime()) return;
+      const hoyStr = ahora.toISOString().split("T")[0]; // "2026-05-07"
+      try {
+        const r = await window.storage.get(ultimoClearKey);
+        const ultimoClearDia = r?.value || null;
+        if (ultimoClearDia === hoyStr) return; // ya limpiamos hoy
+        // Limpiar inventario del vendedor (solo el del sorteo viejo)
+        const sorteoTipoActual = activeSorteo?.tipo;
+        if (!sorteoTipoActual) return;
+        // Filtrar: borrar items de ESTE vendedor cuyo sorteoN es anterior al actual
+        // (el activeSorteo ya es el PRÓXIMO con número incrementado, así que items
+        // con sorteoN viejo son los del sorteo que acaba de jugar).
+        const sorteoNActual = parseInt(activeSorteo.sorteoN || "0", 10);
+        const noEsViejo = item => {
+          if ((item.vendorOwnerId || "vendedor_carlos") !== vendorUserId) return true; // no es mío
+          if (item.sorteoTipo !== sorteoTipoActual) return true; // otro tipo de sorteo
+          const itemN = parseInt(item.sorteoN || "0", 10);
+          return itemN >= sorteoNActual; // si es del actual o posterior, mantener
+        };
+        setBilletes(prev => prev.filter(noEsViejo));
+        setChances(prev => prev.filter(noEsViejo));
+        await window.storage.set(ultimoClearKey, hoyStr);
+        toast(`🔄 Tablero limpiado — Sorteo ${sorteoTipoActual} ya jugó. Ingresa el inventario del próximo.`);
+      } catch(e) { console.warn("Auto-clear error:", e); }
+    };
+    checkClear();
+    const t = setInterval(checkClear, 5 * 60 * 1000); // chequear cada 5 min
+    return () => clearInterval(t);
+  }, [cierreCfg.activo, cierreCfg.horaTope, activeSorteo?.tipo, activeSorteo?.sorteoN, vendorCode, vendorUserId]);
 
   // Estado del GPS del vendedor — para mostrar un banner si NO se ha podido
   // capturar la ubicación. Sin GPS, el comprador ve un punto incorrecto.
@@ -9503,7 +9688,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
 
   // ── Sorteo activo del vendedor (compartido con el comprador) ─────────────
   // Viene de ChanceRoot como prop para sincronizar via Firebase
-  const sorteoInicialFallback = (SORTEOS_RECIENTES && SORTEOS_RECIENTES[0]) || SORTEOS_RECIENTES_SEED[0];
+  const sorteoInicialFallback = getSorteoActivo("MIERCOLITO") || (SORTEOS_RECIENTES && SORTEOS_RECIENTES[0]) || SORTEOS_RECIENTES_SEED[0];
   const sorteoEffective = vendorActiveSorteo || sorteoInicialFallback;
 
   const sharedVendor = {
@@ -9527,6 +9712,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       case "explorar":     return <ExplorarScreen nav={nav} sharedVendor={sharedVendor} activeVendors={activeVendors}/>;
       case "tablero":      return <TableroScreen
         vendor={screenData?.vendor||sharedVendor}
+        vendorActiveSorteo={vendorActiveSorteo}
         cart={cart} setCart={setCart} nav={nav}/>;
       case "carrito":      return <CarritoScreen cart={cart} setCart={setCart} nav={nav}
         onPlaceOrder={placeOrderWithSound}/>;
@@ -9977,7 +10163,20 @@ function useStorage(key, def) {
   const [val, setVal] = useState(def);
   useEffect(() => {
     (async () => {
-      try { const r = await window.storage.get(key); if (r?.value) setVal(JSON.parse(r.value)); } catch(e) {}
+      try {
+        const r = await window.storage.get(key);
+        if (r?.value) {
+          try {
+            const parsed = JSON.parse(r.value);
+            // Si default era array y vino objeto (Firebase artifact), convertir
+            if (Array.isArray(def) && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              setVal(Object.values(parsed));
+            } else {
+              setVal(parsed);
+            }
+          } catch(parseErr) { console.warn("useStorage parse:", parseErr); }
+        }
+      } catch(e) {}
     })();
   }, [key]);
   const save = async (v) => {
@@ -10011,19 +10210,97 @@ function LoginScreen({ onLogin, onGoRegister, registerSuccess=null }) {
 
     const emailLow = email.toLowerCase().trim();
 
-    // 1. Check hardcoded demo users first (always works)
-    const demo = DEMO_USERS.find(u => u.email === emailLow && u.password === pass);
-    if (demo) { onLogin(demo); setLoading(false); return; }
+    // 1. Demos hardcodeados (siempre funciona)
+    try {
+      const demo = DEMO_USERS.find(u => u.email === emailLow && u.password === pass);
+      if (demo) { onLogin(demo); setLoading(false); return; }
+    } catch(e) { console.warn("demo check failed:", e); }
 
-    // 2. Check storage for registered users
+    // 2. Lee usuarios locales — cada paso protegido
+    let users = [];
     try {
       const r = await window.storage.get("users_db");
-      const users = r?.value ? JSON.parse(r.value) : [];
-      const user  = users.find(u => u.email.toLowerCase() === emailLow && u.password === pass);
-      if (user) { onLogin(user); setLoading(false); return; }
-      setErr("Credenciales incorrectas. Verifica tu correo y contraseña.");
-    } catch(e) {
-      setErr("Credenciales incorrectas o cuenta no encontrada.");
+      if (r?.value) {
+        try {
+          const parsed = JSON.parse(r.value);
+          if (Array.isArray(parsed)) users = parsed;
+          else if (parsed && typeof parsed === "object") users = Object.values(parsed);
+        } catch(parseErr) { console.warn("parse users_db failed:", parseErr); }
+      }
+    } catch(storageErr) { console.warn("storage read failed:", storageErr); }
+
+    // 3. Buscar match en local
+    let user = null;
+    try {
+      user = users.find(u => {
+        if (!u || typeof u !== "object") return false;
+        const e = (u.email || "").toLowerCase().trim();
+        return e === emailLow && u.password === pass;
+      });
+    } catch(e) { console.warn("local find failed:", e); }
+
+    // 4. Si no está local, busca en Firebase
+    if (!user) {
+      try {
+        let fbUsers = await fbRead("users");
+        if (fbUsers && !Array.isArray(fbUsers) && typeof fbUsers === "object") {
+          fbUsers = Object.values(fbUsers);
+        }
+        if (Array.isArray(fbUsers)) {
+          user = fbUsers.find(u => {
+            if (!u || typeof u !== "object") return false;
+            const e = (u.email || "").toLowerCase().trim();
+            return e === emailLow && u.password === pass;
+          });
+          // Sincronizar al storage local
+          if (user) {
+            try {
+              users = [...users.filter(u => (u?.email || "").toLowerCase().trim() !== emailLow), user];
+              await window.storage.set("users_db", JSON.stringify(users));
+            } catch(syncErr) { console.warn("sync failed:", syncErr); }
+          }
+        }
+      } catch(fbErr) { console.warn("FB lookup failed:", fbErr); }
+    }
+
+    // 5. Resolver
+    if (user) {
+      try {
+        if (user.status === "SUSPENDIDO") {
+          setErr("Tu cuenta está suspendida. Contacta al administrador.");
+          setLoading(false); return;
+        }
+        onLogin(user);
+        setLoading(false);
+        return;
+      } catch(loginErr) {
+        console.error("onLogin failed:", loginErr);
+        setErr("Error inesperado al entrar. Recarga la página.");
+        setLoading(false);
+        return;
+      }
+    }
+
+    // 6. Diagnóstico
+    let userByEmail = null;
+    try {
+      userByEmail = users.find(u => u?.email && u.email.toLowerCase().trim() === emailLow);
+      // También checa Firebase para diagnóstico
+      if (!userByEmail) {
+        let fbUsers = await fbRead("users");
+        if (fbUsers && !Array.isArray(fbUsers) && typeof fbUsers === "object") {
+          fbUsers = Object.values(fbUsers);
+        }
+        if (Array.isArray(fbUsers)) {
+          userByEmail = fbUsers.find(u => u?.email && u.email.toLowerCase().trim() === emailLow);
+        }
+      }
+    } catch(e) { console.warn("diag failed:", e); }
+
+    if (userByEmail) {
+      setErr(`Contraseña incorrecta para ${emailLow}. Verifica e intenta de nuevo.`);
+    } else {
+      setErr(`No encontramos una cuenta con "${emailLow}". ¿Te registraste correctamente?`);
     }
     setLoading(false);
   };
@@ -10721,6 +10998,89 @@ function AdminPanel({ adminUser, onLogout }) {
   const [aTab,  setATab]        = useState("dashboard");
   const [search, setSearch]     = useState("");
   const [filterRole, setFilterRole] = useState("todos");
+
+  // ── HIDRATAR USUARIOS DESDE FIREBASE Y GARANTIZAR DEMOS ─────────────────
+  // El admin SIEMPRE debe ver al menos los 4 demos (admin, María, Carlos, Juan).
+  // Si Firebase tiene más usuarios reales, los trae también.
+  // Polling cada 5s para detectar nuevos registros automáticamente.
+  useEffect(() => {
+    let active = true;
+
+    // Demos garantizados — siempre presentes
+    const DEMOS_BASE = [
+      {id:"admin1", email:"admin@chance.pa",  password:"Admin2024!", nombre:"Admin CHANCE",   rol:"admin",      cedula:"8-999-0001",telefono:"6000-0001",status:"ACTIVO",createdAt:"01/01/2026"},
+      {id:"demo_c", email:"maria@demo.pa",    password:"Compra123",  nombre:"María González", rol:"cliente",    cedula:"8-123-4567",telefono:"6234-5678",status:"ACTIVO",createdAt:"01/01/2026",provincia:"Panamá",distrito:"Panamá",corregimiento:"San Francisco"},
+      {id:"demo_v", email:"carlos@demo.pa",   password:"Vende123",   nombre:"Carlos Medina",  rol:"vendedor",   cedula:"8-222-3333",telefono:"6111-2222",status:"ACTIVO",createdAt:"01/01/2026",numeroBilletero:"V001",lugarVende:"Calle 50, San Francisco"},
+      {id:"demo_r", email:"juan@demo.pa",     password:"Reparte123", nombre:"Juan Rodríguez", rol:"repartidor", cedula:"8-444-5555",telefono:"6333-4444",status:"ACTIVO",createdAt:"01/01/2026",vehiculo:"🏍 Motocicleta"},
+    ];
+
+    const sync = async () => {
+      try {
+        // 1. Lee storage local
+        let local = [];
+        try {
+          const r = await window.storage.get("users_db");
+          if (r?.value) {
+            const p = JSON.parse(r.value);
+            local = Array.isArray(p) ? p : (p && typeof p === "object" ? Object.values(p) : []);
+          }
+        } catch(e) {}
+
+        // 2. Lee Firebase
+        let fbUsers = [];
+        try {
+          let raw = await fbRead("users");
+          if (raw && !Array.isArray(raw) && typeof raw === "object") {
+            raw = Object.values(raw);
+          }
+          if (Array.isArray(raw)) fbUsers = raw.filter(u => u && typeof u === "object");
+        } catch(e) {}
+
+        // 3. Combinar: demos garantizados + locales + Firebase (sin duplicar emails)
+        const combined = [];
+        const seenEmails = new Set();
+        // Demos primero
+        for (const d of DEMOS_BASE) {
+          if (d?.email) {
+            const e = d.email.toLowerCase().trim();
+            if (!seenEmails.has(e)) { combined.push(d); seenEmails.add(e); }
+          }
+        }
+        // Locales (puede tener fotos)
+        for (const u of local) {
+          if (u?.email) {
+            const e = u.email.toLowerCase().trim();
+            if (!seenEmails.has(e)) { combined.push(u); seenEmails.add(e); }
+          }
+        }
+        // Firebase (puede tener registros recientes que no están local)
+        for (const u of fbUsers) {
+          if (u?.email) {
+            const e = u.email.toLowerCase().trim();
+            if (!seenEmails.has(e)) { combined.push(u); seenEmails.add(e); }
+            else {
+              // Si ya existe en combined, actualizar status desde FB (es la fuente de verdad)
+              const existing = combined.find(x => x?.email?.toLowerCase()?.trim() === e);
+              if (existing && u.status) existing.status = u.status;
+            }
+          }
+        }
+
+        if (active && combined.length > 0) {
+          setUsers(combined);
+          // Persistir el merge para próxima vez
+          try { await window.storage.set("users_db", JSON.stringify(combined)); } catch(e) {}
+          // Si Firebase está vacío, subir los demos para sincronizar
+          if (fbUsers.length === 0) {
+            try { await fbWrite("users", combined); } catch(e) {}
+          }
+        }
+      } catch(e) { console.warn("Admin user sync failed:", e); }
+    };
+    sync(); // primera carga
+    const t = setInterval(sync, 5000);
+    return () => { active = false; clearInterval(t); };
+  }, []);
   const [filterStatus, setFilterStatus] = useState("todos");
   const [selectedUser, setSelectedUser] = useState(null);
   const [actionFeedback, setActionFeedback] = useState("");
@@ -10783,6 +11143,13 @@ function AdminPanel({ adminUser, onLogout }) {
       { maxKm: 25, fee: 10.00 },
     ],
     deliveryExtraPerKm: 0.40,
+    // Hora tope diaria (HH:mm formato 24h) para cerrar las ventas y limpiar
+    // automáticamente los tableros de los vendedores. Después de esta hora,
+    // los compradores ya no pueden hacer pedidos al vendedor del día y los
+    // billetes/chances se borran del inventario para que el vendedor pueda
+    // ingresar el inventario del próximo sorteo.
+    cierreHoraTope: "15:00",   // 3:00 PM hora de Panamá (default)
+    cierreActivo:   true,       // Si false, no se aplica cierre automático
     // Zonas de cobertura
     zonas: [
       { id:1, nombre:"Ciudad de Panamá", activa:true, radiusKm:25 },
@@ -11197,6 +11564,26 @@ function AdminPanel({ adminUser, onLogout }) {
                     </div>
                   </div>
 
+                  <div className="admin-card" style={{marginBottom:10,background:"rgba(255,75,110,.05)",border:"1px solid rgba(255,75,110,.25)"}}>
+                    <div style={{fontSize:11,fontWeight:800,color:"var(--text)",marginBottom:6,letterSpacing:.5}}>⏰ Hora tope diaria de ventas</div>
+                    <div style={{fontSize:10,color:"var(--muted)",marginBottom:10,lineHeight:1.4}}>
+                      Pasada esta hora, los tableros de los vendedores se borran automáticamente para que puedan ingresar el inventario del próximo sorteo. Los compradores no pueden hacer pedidos después de esta hora.
+                    </div>
+                    <div className="row" style={{gap:8,alignItems:"center",marginBottom:10}}>
+                      <span style={{fontSize:11,color:"var(--text)",flex:1,fontWeight:700}}>Cerrar ventas a las:</span>
+                      <input type="time" value={adminCfg.cierreHoraTope || "15:00"}
+                        onChange={e=>updateCfg({cierreHoraTope:e.target.value})}
+                        style={{background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"6px 10px",color:"var(--text)",fontSize:13,fontFamily:"'DM Sans',sans-serif"}}/>
+                      <span style={{fontSize:9,color:"var(--muted)"}}>(hora Panamá)</span>
+                    </div>
+                    <label className="row" style={{gap:8,alignItems:"center",cursor:"pointer"}}>
+                      <input type="checkbox" checked={adminCfg.cierreActivo!==false}
+                        onChange={e=>updateCfg({cierreActivo:e.target.checked})}
+                        style={{cursor:"pointer"}}/>
+                      <span style={{fontSize:11,color:"var(--text)",fontWeight:700}}>Cierre automático activado</span>
+                    </label>
+                  </div>
+
                   <button onClick={()=>toast("✅ Comisiones guardadas")} style={{width:"100%",background:"linear-gradient(135deg,#A78BFA,#8B5CF6)",border:"none",color:"#fff",padding:"12px",borderRadius:10,fontSize:13,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",letterSpacing:.5}}>💾 Guardar cambios</button>
                 </>
               )}
@@ -11467,7 +11854,7 @@ export default function ChanceRoot() {
   const [allUsers,       setAllUsers]       = useState([]);
   // Sorteo activo del vendedor — compartido vía Firebase para que el comprador
   // vea siempre el mismo sorteo que tiene activo el vendedor en su tablero.
-  const sorteoInicialRoot = (SORTEOS_RECIENTES && SORTEOS_RECIENTES[0]) || SORTEOS_RECIENTES_SEED[0];
+  const sorteoInicialRoot = getSorteoActivo("MIERCOLITO") || (SORTEOS_RECIENTES && SORTEOS_RECIENTES[0]) || SORTEOS_RECIENTES_SEED[0];
   const [vendorActiveSorteo, setVendorActiveSorteo] = useState(sorteoInicialRoot);
   const [stateLoaded,    setStateLoaded]    = useState(false);
   // Refs para evitar bucles infinitos al sincronizar con Firebase
