@@ -622,7 +622,7 @@ const SORTEOS_RECIENTES_SEED = [
   },
   {
     tipo: "GORDITO", icon: "🍀", color: "#00D68F", bg: "rgba(0,214,143,.1)", border: "rgba(0,214,143,.28)",
-    sorteoN: "409", fecha: "8 de mayo de 2026",
+    sorteoN: "409", fecha: "24 de abril de 2026",
     premios: [
       { pos: "1er Premio", num: "4281", letras: "CDCC", serie: "7", folio: "4" },
       { pos: "2do Premio", num: "66",   letras: "", serie: "", folio: "" },
