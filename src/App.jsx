@@ -2788,8 +2788,16 @@ function TrackingScreen({ order }) {
       fuente: "order"
     };
   } else if (order?.vendorId === "V001" || order?.vendorId === 1) {
-    const sc = getVendorCoords("V001");
-    vendorCoords = { ...sc, fuente: "static" };
+    // Solo usar coords de Carlos si el vendedor del pedido realmente es Carlos.
+    // Si el pedido tiene otro nombre (ej: Israel Pino) pero quedó con V001 por error,
+    // mostramos null en vez de Bella Vista falso.
+    const esCarlosMedina = !vendorStaticName ||
+      vendorStaticName.toLowerCase().includes("carlos") ||
+      vendorStaticName === "Carlos Medina V001";
+    if (esCarlosMedina) {
+      const sc = getVendorCoords("V001");
+      vendorCoords = { ...sc, fuente: "static" };
+    }
   } else if (order?.vendorId === "V002" || order?.vendorId === 2) {
     const sc = getVendorCoords("V002");
     vendorCoords = { ...sc, fuente: "static" };
@@ -2829,7 +2837,7 @@ function TrackingScreen({ order }) {
       const distOffsetDeg = 0.0020 + ((seed * 13) % 100) / 100000;
       const centroDesplazadoLat = vendorCoords.lat + Math.sin(angRad) * distOffsetDeg;
       const centroDesplazadoLng = vendorCoords.lng + Math.cos(angRad) * distOffsetDeg;
-      circles.push({ lat: centroDesplazadoLat, lng: centroDesplazadoLng, radiusM: 900, color: "#FFCC33" });
+      circles.push({ lat: centroDesplazadoLat, lng: centroDesplazadoLng, radiusM: 2000, color: "#FFCC33" });
       markers.push({
         type: 'vendedor', lat: centroDesplazadoLat, lng: centroDesplazadoLng,
         popup: `<b>🏪 ${vendorCoords.name}</b><br/>📍 ${vendorCoords.zone || "Zona del vendedor"}<br/><small>Ubicación aproximada</small>`,
@@ -5851,9 +5859,16 @@ function ResultadosScreen({ initTab="resultados" }) {
 
     // Si el billete tiene número de sorteo, buscar exactamente ese sorteo
     if (decoded?.sorteo) {
-      const sorteoExacto = todosLosSorteos.find(s => String(s.sorteoN) === String(decoded.sorteo));
+      const sorteoBuscado = parseInt(String(decoded.sorteo).trim(), 10);
+      const sorteoExacto = todosLosSorteos.find(s => {
+        if (!s?.sorteoN) return false;
+        return parseInt(String(s.sorteoN).trim(), 10) === sorteoBuscado;
+      });
+      // Diagnóstico en consola para ver qué está pasando
+      console.log("[Verificar] Buscando sorteo:", sorteoBuscado, "→",
+        sorteoExacto ? `Encontrado: ${sorteoExacto.tipo} ${sorteoExacto.sorteoN}` : "NO encontrado",
+        `(disponibles: ${todosLosSorteos.map(s=>`${s.tipo}-${s.sorteoN}`).join(", ")})`);
       if (!sorteoExacto) {
-        // El sorteo no está en nuestra base de datos = no ha jugado o no está cargado
         return {
           esError: true,
           tipoError: "SORTEO_SIN_JUGAR",
@@ -5861,7 +5876,6 @@ function ResultadosScreen({ initTab="resultados" }) {
           decoded,
         };
       }
-      // Buscar SOLO en ese sorteo específico
       return buscarPremioEnSorteo(sorteoExacto, numero, decoded);
     }
 
@@ -6381,11 +6395,15 @@ function ResultadosScreen({ initTab="resultados" }) {
               } else if (verifResult.decoded && verifResult.decoded.sorteo) {
                 sorteoNumeroSolicitado = verifResult.decoded.sorteo;
                 // Buscar primero en sorteos recientes
-                sorteoMostrar = SORTEOS_RECIENTES.find(s => s.sorteoN === sorteoNumeroSolicitado);
+                sorteoMostrar = SORTEOS_RECIENTES.find(s =>
+                  parseInt(s.sorteoN, 10) === parseInt(sorteoNumeroSolicitado, 10)
+                );
 
                 // Si no está en recientes, buscar en HISTORIAL
                 if (!sorteoMostrar) {
-                  const histMatch = HISTORIAL.find(h => h.sorteoN === sorteoNumeroSolicitado);
+                  const histMatch = HISTORIAL.find(h =>
+                  parseInt(h.sorteoN, 10) === parseInt(sorteoNumeroSolicitado, 10)
+                );
                   if (histMatch) {
                     const base = SORTEOS_RECIENTES.find(s => s.tipo === histMatch.tipo) || SORTEOS_RECIENTES[0];
                     sorteoMostrar = {
@@ -8623,21 +8641,31 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
     const asignado = o.assignedRepartidorId || (o.status === "APROBADO" || o.status === "PENDIENTE" ? null : "repartidor_juan");
     return !asignado || asignado === repartidorUserId;
   };
-  const myOrders        = orders.filter(esMioR);
+  // Pedidos descartados por este repartidor se ocultan de su vista
+  const noDescartado = o => !dismissedOrders.includes(o.id);
+  const myOrders        = orders.filter(o => esMioR(o) && noDescartado(o));
   // APROBADOS: ordenados por distancia al VENDEDOR (más cercano primero)
   const approvedOrders  = sortByDist(myOrders.filter(o=>o.status==="APROBADO"), distToPickup);
   // EN_CAMINO: ordenados por distancia al CLIENTE
   const inTransitOrders = sortByDist(myOrders.filter(o=>o.status==="EN_CAMINO"), distToDropoff);
   const deliveredOrders = myOrders.filter(o=>o.status==="ENTREGADO").sort(sortNewR);
-  // PENDIENTES: todos los que cualquier repartidor puede tomar, por distancia al vendedor
+  // PENDIENTES: todos los que cualquier repartidor puede tomar, filtrando descartados
   const pendingOrders   = sortByDist(
-    orders.filter(o=>["PENDIENTE","MODIFICADO","REEMPLAZO"].includes(o.status)),
+    orders.filter(o=>["PENDIENTE","MODIFICADO","REEMPLAZO"].includes(o.status) && noDescartado(o)),
     distToPickup
   );
 
   // ─── TRACKING GPS EN VIVO ───
   // Se activa automáticamente cuando el repartidor tiene al menos 1 entrega EN_CAMINO
   // Envía la ubicación a Firebase cada vez que cambia (watchPosition)
+  // Pedidos descartados por este repartidor (solo en su dispositivo)
+  const [dismissedOrders, setDismissedOrders] = useState([]);
+  useEffect(() => {
+    window.storage.get(`repartidor_dismissed_${repartidorUserId}`)
+      .then(r => { if (r?.value) setDismissedOrders(JSON.parse(r.value)); })
+      .catch(()=>{});
+  }, [repartidorUserId]);
+
   const tieneEntregaActiva = inTransitOrders.length > 0;
   useTrackingUbicacion(repartidorUserId, tieneEntregaActiva);
 
@@ -9172,8 +9200,24 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
               <div className="row" style={{gap:7,justifyContent:"flex-end",flexWrap:"wrap"}}>
                 {/* Estado: PENDIENTE — Esperando aprobación del vendedor */}
                 {fase === "espera" && (
-                  <div style={{padding:"7px 13px",background:"rgba(244,196,48,.08)",border:"1px dashed rgba(244,196,48,.3)",borderRadius:9,color:"var(--gold)",fontSize:11,fontWeight:700,fontFamily:"'DM Sans'",display:"flex",alignItems:"center",gap:5}}>
-                    ⏳ Esperando aprobación del vendedor
+                  <div style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+                    <div style={{padding:"7px 13px",background:"rgba(244,196,48,.08)",border:"1px dashed rgba(244,196,48,.3)",borderRadius:9,color:"var(--gold)",fontSize:11,fontWeight:700,fontFamily:"'DM Sans'",display:"flex",alignItems:"center",gap:5}}>
+                      ⏳ Esperando aprobación del vendedor
+                    </div>
+                    <button onClick={()=>{
+                      if (window.confirm(`¿Descartar pedido ${o.id} de tu vista?\n(El pedido no se cancela, solo lo ocultas de tu lista)`)) {
+                        // Guardar en storage local los pedidos descartados por este repartidor
+                        const key = `repartidor_dismissed_${repartidorUserId}`;
+                        window.storage.get(key).then(r => {
+                          const arr = r?.value ? JSON.parse(r.value) : [];
+                          if (!arr.includes(o.id)) arr.push(o.id);
+                          window.storage.set(key, JSON.stringify(arr));
+                          setDismissedOrders(arr);
+                        }).catch(()=>{});
+                      }
+                    }} style={{padding:"7px 10px",background:"rgba(255,75,110,.08)",border:"1px solid rgba(255,75,110,.25)",borderRadius:9,color:"var(--red)",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans'",flexShrink:0}}>
+                      ✕ Descartar
+                    </button>
                   </div>
                 )}
 
