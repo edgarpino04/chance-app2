@@ -2875,11 +2875,16 @@ function TrackingScreen({ order }) {
       <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:"var(--gold)",letterSpacing:2,marginBottom:10}}>SEGUIMIENTO</div>
       {order&&(
         <div style={{background:"rgba(0,214,143,.06)",border:"1px solid rgba(0,214,143,.2)",borderRadius:11,padding:"9px 13px",marginBottom:10}}>
-          <div style={{fontWeight:800,fontSize:13,color:"var(--text)"}}>
-            {order.type==="billete"?"🎟 Billete Nº ":"⚡ Chance #"}{order.num}
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:20}}>🛵</span>
+            <div>
+              <div style={{fontSize:9,color:"var(--muted)",fontWeight:800,letterSpacing:1,textTransform:"uppercase"}}>Pedido</div>
+              <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:"var(--gold)",letterSpacing:2,lineHeight:1}}>{order.id}</div>
+            </div>
           </div>
-          <div style={{fontSize:10,color:"var(--muted)",marginTop:2}}>
-            {order.vendor||"Carlos Medina V001"} · {order.paymentMethod==="YAPPY"?"📱 Yappy":"💵 Efectivo"} · Pedido {order.id}
+          <div style={{fontSize:10,color:"var(--muted)",marginTop:5}}>
+            {order.vendor||"Vendedor"} · {order.paymentMethod==="YAPPY"?"📱 Yappy":"💵 Efectivo"}
+            {order.itemCount>1 ? ` · ${order.itemCount} items` : order.num ? ` · Nº ${order.num}` : ""}
           </div>
         </div>
       )}
@@ -2939,24 +2944,31 @@ function TrackingScreen({ order }) {
               <div>
                 <div style={{fontWeight:800,fontSize:13,color:"var(--text)"}}>{repName} <span className="badge bg" style={{fontSize:8}}>✅</span></div>
                 <div style={{fontSize:10,color:"var(--muted)"}}>⭐ 4.8 · {(order?.deliveriesCount||342)} entregas</div>
-                <div style={{fontSize:10,color:"var(--blue)",fontWeight:700,marginTop:2}}>📞 {order?.assignedRepartidorPhone || "6333-4444"}</div>
+                <div style={{fontSize:10,color:"var(--blue)",fontWeight:700,marginTop:2}}>📞 {order?.assignedRepartidorPhone || "—"}</div>
               </div>
             </div>
           </div>
-        {/* Botones de comunicación */}
-        {order?.status==="EN_CAMINO"&&(
-          <div style={{display:"flex",gap:6,marginTop:6}}>
-            <a href="tel:+5076333-4444" style={{flex:1,padding:"9px",borderRadius:9,background:"rgba(0,214,143,.1)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:11,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
-              📞 Llamar
-            </a>
-            <a href="https://wa.me/50763334444" target="_blank" rel="noopener" style={{flex:1,padding:"9px",borderRadius:9,background:"rgba(0,214,143,.1)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:11,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
-              💬 WhatsApp
-            </a>
-            <a href="sms:+5076333-4444" style={{flex:1,padding:"9px",borderRadius:9,background:"rgba(59,158,255,.1)",border:"1px solid rgba(59,158,255,.3)",color:"var(--blue)",fontSize:11,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
-              📩 SMS
-            </a>
-          </div>
-        )}
+        {/* Botones de comunicación — usan el número REAL del repartidor asignado */}
+        {order?.status==="EN_CAMINO"&&order?.assignedRepartidorPhone&&(()=>{
+          const rawPhone = (order.assignedRepartidorPhone||"").replace(/\D/g,"");
+          const phoneE164 = rawPhone.startsWith("507") ? rawPhone : `507${rawPhone}`;
+          return (
+            <div style={{display:"flex",gap:6,marginTop:6}}>
+              <a href={`tel:+${phoneE164}`}
+                style={{flex:1,padding:"9px",borderRadius:9,background:"rgba(0,214,143,.1)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:11,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+                📞 Llamar
+              </a>
+              <a href={`https://wa.me/${phoneE164}`} target="_blank" rel="noopener"
+                style={{flex:1,padding:"9px",borderRadius:9,background:"rgba(0,214,143,.1)",border:"1px solid rgba(0,214,143,.3)",color:"var(--green)",fontSize:11,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+                💬 WhatsApp
+              </a>
+              <a href={`sms:+${phoneE164}`}
+                style={{flex:1,padding:"9px",borderRadius:9,background:"rgba(59,158,255,.1)",border:"1px solid rgba(59,158,255,.3)",color:"var(--blue)",fontSize:11,fontWeight:800,textAlign:"center",textDecoration:"none",fontFamily:"'DM Sans'"}}>
+                📩 SMS
+              </a>
+            </div>
+          );
+        })()}
         </div>
         );
       })()}
@@ -5805,109 +5817,110 @@ function ResultadosScreen({ initTab="resultados" }) {
      ║  Compara el número escaneado con los sorteos recientes       ║
      ╚══════════════════════════════════════════════════════════════╝ */
   const calcularPremio = (decoded, numeroManual) => {
-    // Si no viene decoded, usar número manual contra todos los sorteos
     const numero = decoded?.numero || numeroManual;
     if (!numero) return null;
 
-    let mejorMatch = null;
+    // ── PASO 1: Verificar si el código fue decodificado correctamente ────────
+    // Si el tipo es DESCONOCIDO o no hay código decodificado, es un código no válido
+    if (decoded?.tipo === "DESCONOCIDO" || (!decoded && !numeroManual)) {
+      return { esError: true, tipoError: "CODIGO_NO_DETECTADO" };
+    }
 
-    // Buscar primero en SORTEOS_RECIENTES (datos completos con colores/estilos)
-    // Luego en HISTORIAL (convertido al mismo formato)
+    // ── PASO 2: Buscar el sorteo EXACTO del billete ─────────────────────────
+    // El billete tiene el número de sorteo en su código de barras (decoded.sorteo).
+    // Si ese sorteo NO está en nuestra base de datos, no podemos verificar.
+    // NUNCA buscar en otros sorteos: un billete del Gordito 409 no puede coincidir
+    // con premios del Miercolito 3062.
     const HISTORIAL_COMO_SORTEOS = HISTORIAL.map(h => {
       const base = SORTEOS_RECIENTES.find(s => s.tipo === h.tipo) || SORTEOS_RECIENTES[0];
       return {
         tipo: h.tipo,
-        icon: base.icon,
-        color: base.color,
-        bg: base.bg,
-        border: base.border,
-        sorteoN: h.sorteoN,
-        fecha: h.fecha,
+        icon: base.icon, color: base.color, bg: base.bg, border: base.border,
+        sorteoN: h.sorteoN, fecha: h.fecha,
         premios: h.premios.map(p => ({
           pos: p.pos === "1er" ? "1er Premio" : p.pos === "2do" ? "2do Premio" : p.pos === "3er" ? "3er Premio" : p.pos,
-          num: p.num,
-          letras: p.letras || "",
-          serie: p.serie || "",
-          folio: p.folio || "",
+          num: p.num, letras: p.letras || "", serie: p.serie || "", folio: p.folio || "",
         })),
-        premioMayor: base.premioMayor,
-        frecuencia: base.frecuencia,
+        premioMayor: base.premioMayor, frecuencia: base.frecuencia,
       };
     });
 
-    // Si el billete tiene sorteoN específico, priorizar ese sorteo
-    let fuentesBusqueda;
+    const todosLosSorteos = [...SORTEOS_RECIENTES, ...HISTORIAL_COMO_SORTEOS];
+
+    // Si el billete tiene número de sorteo, buscar exactamente ese sorteo
     if (decoded?.sorteo) {
-      const exacto = [...SORTEOS_RECIENTES, ...HISTORIAL_COMO_SORTEOS].find(s => s.sorteoN === decoded.sorteo);
-      if (exacto) {
-        fuentesBusqueda = [exacto];
+      const sorteoExacto = todosLosSorteos.find(s => String(s.sorteoN) === String(decoded.sorteo));
+      if (!sorteoExacto) {
+        // El sorteo no está en nuestra base de datos = no ha jugado o no está cargado
+        return {
+          esError: true,
+          tipoError: "SORTEO_SIN_JUGAR",
+          sorteoN: decoded.sorteo,
+          decoded,
+        };
+      }
+      // Buscar SOLO en ese sorteo específico
+      return buscarPremioEnSorteo(sorteoExacto, numero, decoded);
+    }
+
+    // Sin sorteoN en el código: buscar en todos (modo manual por número)
+    let mejorMatch = null;
+    for (const sorteo of todosLosSorteos) {
+      const resultado = buscarPremioEnSorteo(sorteo, numero, decoded);
+      if (resultado && (!mejorMatch || resultado.monto > mejorMatch.monto)) {
+        mejorMatch = resultado;
+      }
+    }
+    return mejorMatch;
+  };
+
+  // ── Helper: buscar premio de un número en un sorteo específico ────────────
+  const buscarPremioEnSorteo = (sorteo, numero, decoded) => {
+    const esChance = decoded?.tipo === "CHANCE" || (!decoded && numero.length === 2);
+    let mejorMatch = null;
+
+    for (let i = 0; i < sorteo.premios.length; i++) {
+      const p = sorteo.premios[i];
+      const premioNum = p.num;
+      let match = false, tipoPremio = "", montoPremio = 0;
+
+      if (esChance) {
+        const ult2 = premioNum.slice(-2).padStart(2, "0");
+        const numN = numero.slice(-2).padStart(2, "0");
+        if (ult2 === numN) {
+          match = true;
+          tipoPremio = `${p.pos} (Chance)`;
+          if (i === 0) montoPremio = 14;
+          else if (i === 1) montoPremio = 3;
+          else montoPremio = 2;
+        }
       } else {
-        fuentesBusqueda = [...SORTEOS_RECIENTES, ...HISTORIAL_COMO_SORTEOS];
-      }
-    } else {
-      fuentesBusqueda = [...SORTEOS_RECIENTES, ...HISTORIAL_COMO_SORTEOS];
-    }
-
-    for (const sorteo of fuentesBusqueda) {
-      const esChance = decoded?.tipo === "CHANCE" || (!decoded && numero.length === 2);
-
-      for (let i = 0; i < sorteo.premios.length; i++) {
-        const p = sorteo.premios[i];
-        const premioNum = p.num;
-
-        let match = false;
-        let tipoPremio = "";
-        let montoPremio = 0;
-
-        if (esChance) {
-          const ult2 = premioNum.slice(-2).padStart(2, "0");
-          const numN = numero.slice(-2).padStart(2, "0");
-          if (ult2 === numN) {
-            match = true;
-            tipoPremio = `${p.pos} (Chance)`;
-            if (i === 0) montoPremio = 14;
-            else if (i === 1) montoPremio = 3;
-            else if (i === 2) montoPremio = 2;
+        if (premioNum === numero) {
+          match = true;
+          if (decoded?.serie === p.serie && decoded?.folio === p.folio) {
+            tipoPremio = `${p.pos} con Serie y Folio`;
+            montoPremio = i === 0 ? 2000 : i === 1 ? 600 : 300;
+          } else {
+            tipoPremio = `${p.pos} (4 cifras)`;
+            montoPremio = i === 0 ? 200 : i === 1 ? 50 : 30;
           }
-        } else {
-          if (premioNum === numero) {
-            match = true;
-            if (decoded?.serie === p.serie && decoded?.folio === p.folio) {
-              tipoPremio = `${p.pos} con Serie y Folio`;
-              if (i === 0) montoPremio = 2000;
-              else if (i === 1) montoPremio = 600;
-              else montoPremio = 300;
-            } else {
-              tipoPremio = `${p.pos} (4 cifras)`;
-              if (i === 0) montoPremio = 200;
-              else if (i === 1) montoPremio = 50;
-              else montoPremio = 30;
-            }
-          } else if (premioNum.slice(-3) === numero.slice(-3)) {
-            match = true;
-            tipoPremio = "Aproximación 3 cifras";
-            montoPremio = 5;
-          } else if (premioNum.slice(-2) === numero.slice(-2) && i === 0) {
-            match = true;
-            tipoPremio = "Últimas 2 cifras del 1er premio";
-            montoPremio = 2;
-          }
+        } else if (premioNum.slice(-3) === numero.slice(-3)) {
+          match = true;
+          tipoPremio = "Aproximación 3 cifras";
+          montoPremio = 5;
+        } else if (premioNum.slice(-2) === numero.slice(-2) && i === 0) {
+          match = true;
+          tipoPremio = "Últimas 2 cifras del 1er premio";
+          montoPremio = 2;
         }
+      }
 
-        if (match) {
-          if (!mejorMatch || montoPremio > mejorMatch.monto) {
-            mejorMatch = {
-              sorteo: sorteo,
-              posicion: i,
-              premio: p,
-              tipoPremio: tipoPremio,
-              monto: montoPremio,
-            };
-          }
+      if (match) {
+        if (!mejorMatch || montoPremio > mejorMatch.monto) {
+          mejorMatch = { sorteo, posicion: i, premio: p, tipoPremio, monto: montoPremio };
         }
       }
     }
-
     return mejorMatch;
   };
 
@@ -6260,8 +6273,35 @@ function ResultadosScreen({ initTab="resultados" }) {
         {/* RESULTADO VERIFICACIÓN */}
         {scanned && verifResult && (
           <div className="pop">
-            {/* Resultado principal: Ganador o No ganador */}
-            {verifResult.premio ? (
+            {/* ── ESTADO: CÓDIGO NO DETECTADO ────────────────────────────── */}
+            {verifResult.premio?.esError && verifResult.premio?.tipoError === "CODIGO_NO_DETECTADO" ? (
+              <div style={{background:"linear-gradient(135deg,rgba(255,75,110,.12),rgba(255,75,110,.04))",border:"2px solid rgba(255,75,110,.4)",borderRadius:18,padding:20,textAlign:"center",marginBottom:12}}>
+                <div style={{fontSize:48,marginBottom:6}}>🚫</div>
+                <div style={{fontFamily:"'Bebas Neue'",fontSize:30,color:"var(--red)",letterSpacing:2,marginBottom:6,lineHeight:1}}>CÓDIGO DE BARRA<br/>NO DETECTADO</div>
+                <div style={{fontSize:11,color:"var(--muted)",lineHeight:1.6}}>
+                  No se pudo leer el código de barras.<br/>
+                  Asegúrate de que el billete esté limpio y bien iluminado.
+                </div>
+              </div>
+
+            /* ── ESTADO: SORTEO SIN JUGAR ─────────────────────────────────── */
+            ) : verifResult.premio?.esError && verifResult.premio?.tipoError === "SORTEO_SIN_JUGAR" ? (
+              <div style={{background:"linear-gradient(135deg,rgba(244,196,48,.12),rgba(244,196,48,.04))",border:"2px solid rgba(244,196,48,.4)",borderRadius:18,padding:20,textAlign:"center",marginBottom:12}}>
+                <div style={{fontSize:48,marginBottom:6}}>⏳</div>
+                <div style={{fontFamily:"'Bebas Neue'",fontSize:30,color:"var(--gold)",letterSpacing:2,marginBottom:6,lineHeight:1}}>SORTEO<br/>SIN JUGAR</div>
+                <div style={{background:"rgba(8,17,31,.5)",borderRadius:12,padding:"10px 20px",display:"inline-block",marginBottom:10}}>
+                  <div style={{fontSize:9,color:"var(--muted)",fontWeight:700,marginBottom:2}}>SORTEO Nº</div>
+                  <div style={{fontFamily:"'Bebas Neue'",fontSize:36,color:"var(--gold)",letterSpacing:2,lineHeight:1}}>{verifResult.premio?.sorteoN}</div>
+                </div>
+                <div style={{fontSize:11,color:"var(--muted)",lineHeight:1.6}}>
+                  Este sorteo aún no ha jugado o sus resultados<br/>
+                  no están disponibles en la app.<br/>
+                  <strong style={{color:"var(--text)"}}>Consulta los resultados oficiales en lnb.gob.pa</strong>
+                </div>
+              </div>
+
+            /* ── ESTADO: GANADOR ──────────────────────────────────────────── */
+            ) : verifResult.premio ? (
               <div style={{background:"linear-gradient(135deg,rgba(0,214,143,.15),rgba(0,214,143,.04))",border:"2px solid rgba(0,214,143,.4)",borderRadius:18,padding:20,textAlign:"center",marginBottom:12}}>
                 <div style={{fontSize:48,marginBottom:6}}>🏆</div>
                 <div style={{fontFamily:"'Bebas Neue'",fontSize:36,color:"var(--green)",letterSpacing:4,marginBottom:4,lineHeight:1}}>¡GANADOR!</div>
@@ -6276,6 +6316,8 @@ function ResultadosScreen({ initTab="resultados" }) {
                 </div>
                 <div style={{fontSize:10,color:"var(--muted)"}}>{verifResult.premio.sorteo.fecha}</div>
               </div>
+
+            /* ── ESTADO: NO GANADOR ───────────────────────────────────────── */
             ) : (
               <div style={{background:"linear-gradient(135deg,rgba(147,173,204,.1),rgba(147,173,204,.03))",border:"2px solid rgba(147,173,204,.3)",borderRadius:18,padding:20,textAlign:"center",marginBottom:12}}>
                 <div style={{fontSize:44,marginBottom:6}}>😔</div>
@@ -7181,7 +7223,14 @@ function VendedorHome({ authUser=null, billetes=[], setBilletes, chances=[], set
   // Cada vendedor solo ve los items que le pertenecen (etiquetados con
   // vendorOwnerId). Backward-compat: items sin tag se asumen como Carlos.
   const sorteoActivoTipo = activeSorteo?.tipo || "MIERCOLITO";
-  const esMio = item => (item.vendorOwnerId || "vendedor_carlos") === vendorUserId;
+  // Filtro robusto de inventario. Incluye items propios por userId, código y legacy.
+  const esMio = item => {
+    if (item.vendorOwnerId === vendorUserId) return true;
+    if (item.vendorCode && String(item.vendorCode) === String(vendorCode)) return true;
+    // Legacy: items sin vendorOwnerId se asumen de Carlos V001
+    if (!item.vendorOwnerId && (vendorCode === "V001" || vendorUserId === "vendedor_carlos")) return true;
+    return false;
+  };
   const billetesDelSorteo = (billetes||[]).filter(b => esMio(b) && (!b.sorteoTipo || b.sorteoTipo === sorteoActivoTipo));
   const chancesDelSorteo  = (chances ||[]).filter(c => esMio(c) && (!c.sorteoTipo || c.sorteoTipo === sorteoActivoTipo));
 
@@ -7257,7 +7306,23 @@ function VendedorHome({ authUser=null, billetes=[], setBilletes, chances=[], set
   };
   // Filtrar solo los pedidos que le pertenecen a ESTE vendedor
   // Backward-compat: pedidos sin vendorUserId se asumen como Carlos
-  const esMioOrder = o => (o.vendorUserId || "vendedor_carlos") === vendorUserId;
+  // Filtro robusto de pedidos del vendedor. Maneja 3 casos:
+  // 1. Pedidos nuevos: vendorUserId === authUser.id (correcto)
+  // 2. Pedidos viejos con fallback: vendorUserId === "vendedor_carlos" pero el nombre coincide
+  // 3. Pedidos con vendorId (código billetero): o.vendorId === vendorCode
+  const esMioOrder = o => {
+    // 1. Match por ID real del vendedor (caso normal post-fix)
+    if (o.vendorUserId && o.vendorUserId === vendorUserId) return true;
+    // 2. Match por código de billetero (numeroBilletero)
+    if (o.vendorId && String(o.vendorId) === String(vendorCode)) return true;
+    // 3. Match por nombre del vendedor (legacy/fallback)
+    if (o.vendor && vendorName && o.vendor.trim().toLowerCase() === vendorName.trim().toLowerCase()) return true;
+    // 4. Si es Carlos demo (V001) y vendorUserId es "vendedor_carlos"
+    if (vendorCode === "V001" && (!o.vendorUserId || o.vendorUserId === "vendedor_carlos")) return true;
+    // 5. Si es Rosa demo (V002)
+    if (vendorCode === "V002" && o.vendorUserId === "vendedor_rosa") return true;
+    return false;
+  };
   const myOrders          = orders.filter(esMioOrder);
   const pendingOrders     = myOrders.filter(o=>o.status==="PENDIENTE").sort(sortNew);
   const replacementOrders = myOrders.filter(o=>o.status==="REEMPLAZO").sort(sortNew);
@@ -8634,17 +8699,14 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
   // ══════════════════════════════════════════════════════════════════════
   const WALLET_PATH = `billeteras/${repartidorUserId}`;
   const WALLET_INITIAL = {
-    saldo: 0,          // saldo disponible en billetera virtual
-    ganado: 0,         // total ganado (delivery + propinas) hoy
-    entregas: 0,       // total entregas completadas hoy
-    efectivoMano: 0,   // efectivo físico que tiene en mano (cobrado a clientes)
-    deudaApp: 0,       // lo que debe a la app (service fee de pedidos en efectivo)
-    historia: [],      // log de transacciones
-    actualizadoEl: null,
+    saldo: 0, ganado: 0, entregas: 0, efectivoMano: 0,
+    deudaApp: 0, historia: [], actualizadoEl: null,
   };
 
   const [wallet, setWallet] = useState(WALLET_INITIAL);
   const [walletLoaded, setWalletLoaded] = useState(false);
+  // Ref para siempre tener el valor más reciente sin depender del closure
+  const walletRef = useRef(WALLET_INITIAL);
 
   // Cargar billetera desde Firebase al montar
   useEffect(() => {
@@ -8653,33 +8715,50 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
       try {
         const data = await fbRead(WALLET_PATH);
         if (active && data && typeof data === "object") {
-          setWallet({ ...WALLET_INITIAL, ...data });
+          const merged = { ...WALLET_INITIAL, ...data };
+          setWallet(merged);
+          walletRef.current = merged; // mantener ref actualizada
         }
       } catch(e) {}
       if (active) setWalletLoaded(true);
     };
     cargar();
-    // Polling cada 10s para sincronizar si el admin hace ajustes
-    const t = setInterval(cargar, 10000);
+    const t = setInterval(cargar, 15000); // 15s para reducir frecuencia
     return () => { active = false; clearInterval(t); };
   }, [repartidorUserId]);
 
-  // Guardar billetera en Firebase
-  const saveWallet = async (next) => {
-    const updated = { ...wallet, ...next, actualizadoEl: new Date().toLocaleString("es-PA") };
+  // Guardar billetera — SIEMPRE lee Firebase antes de escribir para evitar
+  // sobreescribir con estado stale del closure (causa del bug $50 → $500)
+  const saveWallet = async (patch) => {
+    // 1. Leer estado actual de Firebase (fuente de verdad)
+    let base = walletRef.current;
+    try {
+      const fbData = await fbRead(WALLET_PATH);
+      if (fbData && typeof fbData === "object") {
+        base = { ...WALLET_INITIAL, ...fbData };
+      }
+    } catch(e) {}
+    // 2. Aplicar el patch encima del estado real (no del closure)
+    const updated = {
+      ...base,
+      ...patch,
+      actualizadoEl: new Date().toLocaleString("es-PA"),
+    };
+    // 3. Guardar localmente y en Firebase
     setWallet(updated);
+    walletRef.current = updated;
     try { await fbWrite(WALLET_PATH, updated); } catch(e) {}
     return updated;
   };
 
   // Añadir transacción al historial
-  const addTx = (wallet, desc, monto, tipo) => {
+  const addTx = (walletState, desc, monto, tipo) => {
     const tx = {
       id: Date.now().toString(36),
       ts: new Date().toLocaleString("es-PA"),
-      desc, monto, tipo // "ingreso" | "egreso" | "deuda" | "liquidacion" | "entrega"
+      desc, monto, tipo
     };
-    return { ...wallet, historia: [tx, ...(wallet.historia||[])].slice(0, 50) };
+    return { ...walletState, historia: [tx, ...(walletState.historia||[])].slice(0, 50) };
   };
 
   // Registrar entrega completada en la billetera
@@ -8689,38 +8768,48 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
     const ganancia   = parseFloat(et._driver) || 0;
     const deuda      = esEfectivo ? (parseFloat(et._appSvc||0) + parseFloat(et._appComm||0)) : 0;
     const efectivo   = esEfectivo ? parseFloat(et._customerTotal||0) : 0;
-
+    // Leer base fresca de Firebase antes de sumar
+    let base = walletRef.current;
+    try {
+      const fbData = await fbRead(WALLET_PATH);
+      if (fbData && typeof fbData === "object") base = { ...WALLET_INITIAL, ...fbData };
+    } catch(e) {}
     let next = {
-      saldo:        wallet.saldo + ganancia,
-      ganado:       wallet.ganado + ganancia,
-      entregas:     wallet.entregas + 1,
-      deudaApp:     wallet.deudaApp + deuda,
-      efectivoMano: wallet.efectivoMano + efectivo,
+      saldo:        base.saldo + ganancia,
+      ganado:       base.ganado + ganancia,
+      entregas:     base.entregas + 1,
+      deudaApp:     base.deudaApp + deuda,
+      efectivoMano: base.efectivoMano + efectivo,
     };
-    next = addTx(next,
-      `Entrega ${order.id} · ${esEfectivo ? "Efectivo" : "Yappy"}`,
-      ganancia, "entrega"
-    );
+    next = addTx({ ...base, ...next }, `Entrega ${order.id} · ${esEfectivo ? "Efectivo" : "Yappy"}`, ganancia, "entrega");
     await saveWallet(next);
   };
 
   // Liquidar deuda con la app
   const liquidarDeuda = async () => {
-    if (wallet.deudaApp <= 0) return;
-    const monto = wallet.deudaApp;
-    let next = {
-      deudaApp:     0,
-      efectivoMano: Math.max(0, wallet.efectivoMano - monto),
-    };
-    next = addTx(next, `Liquidación App · ${fmt(monto * 100)}`, -monto, "liquidacion");
+    let base = walletRef.current;
+    try {
+      const fbData = await fbRead(WALLET_PATH);
+      if (fbData && typeof fbData === "object") base = { ...WALLET_INITIAL, ...fbData };
+    } catch(e) {}
+    if (base.deudaApp <= 0) return;
+    const monto = base.deudaApp;
+    let next = { ...base, deudaApp: 0, efectivoMano: Math.max(0, base.efectivoMano - monto) };
+    next = addTx(next, `Liquidación App · $${monto.toFixed(2)}`, -monto, "liquidacion");
     await saveWallet(next);
     setShowLiquidarModal(false);
     toast("✅ Deuda liquidada. Estás al día con CHANCE.");
   };
 
-  // Depositar dinero en la billetera (ingreso manual — simula Yappy/banco)
+  // Depositar dinero en la billetera
   const depositar = async (monto, metodo) => {
-    let next = { saldo: wallet.saldo + monto };
+    // Leer base fresca de Firebase para evitar el bug "$50 se convierte en $500"
+    let base = walletRef.current;
+    try {
+      const fbData = await fbRead(WALLET_PATH);
+      if (fbData && typeof fbData === "object") base = { ...WALLET_INITIAL, ...fbData };
+    } catch(e) {}
+    let next = { ...base, saldo: base.saldo + monto };
     next = addTx(next, `Depósito · ${metodo}`, monto, "ingreso");
     await saveWallet(next);
     setShowDepositoModal(false);
