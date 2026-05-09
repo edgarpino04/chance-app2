@@ -622,16 +622,18 @@ const SORTEOS_RECIENTES_SEED = [
   },
   {
     tipo: "GORDITO", icon: "🍀", color: "#00D68F", bg: "rgba(0,214,143,.1)", border: "rgba(0,214,143,.28)",
-    sorteoN: "408", fecha: "27 de marzo de 2026",
+    sorteoN: "409", fecha: "8 de mayo de 2026",
     premios: [
-      { pos: "1er Premio", num: "4778", letras: "BCAA", serie: "9", folio: "5" },
-      { pos: "2do Premio", num: "20", letras: "", serie: "", folio: "" },
-      { pos: "3er Premio", num: "89", letras: "", serie: "", folio: "" },
+      { pos: "1er Premio", num: "4281", letras: "CDCC", serie: "7", folio: "4" },
+      { pos: "2do Premio", num: "66",   letras: "", serie: "", folio: "" },
+      { pos: "3er Premio", num: "07",   letras: "", serie: "", folio: "" },
     ],
     premioMayor: "$1,004,000",
-    proximoISO: "2026-05-29T15:00:00",
-    frecuencia: "Último viernes del mes",
-    // datos confirmados desde LNB.gob.pa el 05/05/2026
+    proximoISO: "2026-06-12T15:00:00",  // Próximo Gordito — segundo viernes de junio
+    frecuencia: "Segundo viernes del mes",
+    // Sorteo Nº 409 jugó el 8 de mayo de 2026 (signo Piscis)
+    // La fecha en el billete dice 24 de abril (fecha de emisión del billete)
+    // pero el sorteo se realizó el 8 de mayo
   },
 ];
 
@@ -6138,7 +6140,7 @@ function ResultadosScreen({ initTab="resultados" }) {
           </button>
         </div>
         {SORTEOS_RECIENTES.map(s=>(
-          <div key={s.tipo} className="sort-card" style={{background:s.bg,borderColor:s.border,marginBottom:10}}>
+          <div key={`${s.tipo}-${s.sorteoN}`} className="sort-card" style={{background:s.bg,borderColor:s.border,marginBottom:10}}>
             <div style={{position:"absolute",right:-20,top:-20,width:80,height:80,borderRadius:"50%",background:s.bg}}/>
             <div className="row" style={{justifyContent:"space-between",marginBottom:10}}>
               <div>
@@ -6150,16 +6152,26 @@ function ResultadosScreen({ initTab="resultados" }) {
                 <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:s.color,letterSpacing:1}}>{s.premioMayor}</div>
               </div>
             </div>
-            <div style={{display:"flex",gap:7}}>
-              {s.premios.map((p,pi)=>(
-                <div key={p.pos} style={{flex:1,background:"rgba(8,17,31,.4)",borderRadius:9,padding:"7px 3px",textAlign:"center"}}>
-                  <div style={{fontSize:8,color:"var(--muted)",fontWeight:700,textTransform:"uppercase",marginBottom:2}}>{p.pos}</div>
-                  <div style={{fontFamily:"'Bebas Neue'",fontSize:p.num.length>4?13:17,color:cols[pi].c,letterSpacing:1,lineHeight:1}}>{p.num}</div>
-                  {p.letras&&<div style={{fontSize:8,color:s.color,fontWeight:800,marginTop:1,letterSpacing:.4}}>{p.letras}</div>}
-                  {p.serie&&<div style={{fontSize:7,color:"var(--muted)",marginTop:1}}>S{p.serie} F{p.folio}</div>}
+            {s.pendiente ? (
+              <div style={{background:"rgba(8,17,31,.5)",borderRadius:9,padding:"12px",textAlign:"center"}}>
+                <div style={{fontSize:20,marginBottom:4}}>⏳</div>
+                <div style={{fontSize:11,fontWeight:800,color:"var(--gold)"}}>Resultados pendientes</div>
+                <div style={{fontSize:9,color:"var(--muted)",marginTop:3}}>
+                  Sorteo jugado el {s.fecha} · Los resultados serán publicados por lnb.gob.pa en breve
                 </div>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div style={{display:"flex",gap:7}}>
+                {s.premios.map((p,pi)=>(
+                  <div key={p.pos} style={{flex:1,background:"rgba(8,17,31,.4)",borderRadius:9,padding:"7px 3px",textAlign:"center"}}>
+                    <div style={{fontSize:8,color:"var(--muted)",fontWeight:700,textTransform:"uppercase",marginBottom:2}}>{p.pos}</div>
+                    <div style={{fontFamily:"'Bebas Neue'",fontSize:p.num.length>4?13:17,color:cols[pi].c,letterSpacing:1,lineHeight:1}}>{p.num}</div>
+                    {p.letras&&<div style={{fontSize:8,color:s.color,fontWeight:800,marginTop:1,letterSpacing:.4}}>{p.letras}</div>}
+                    {p.serie&&<div style={{fontSize:7,color:"var(--muted)",marginTop:1}}>S{p.serie} F{p.folio}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
         <div style={{background:"rgba(59,158,255,.07)",border:"1px solid rgba(59,158,255,.18)",borderRadius:11,padding:"9px 12px",display:"flex",gap:8,alignItems:"center"}}>
