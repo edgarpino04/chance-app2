@@ -342,7 +342,7 @@ function MapaLeaflet({ center = [8.9824, -79.5199], zoom = 14, markers = [], rou
 // userId: identificador único del usuario (ej: "vendedor_carlos", "repartidor_juan")
 // activo: si true, captura GPS y envía a Firebase
 // ═══════════════════════════════════════════════════════════════════════
-function useTrackingUbicacion(userId, activo) {
+function useTrackingUbicacion(userId, activo, extraUserId = null) {
   useEffect(() => {
     if (!activo || !userId) return;
     if (!navigator.geolocation) {
@@ -361,24 +361,30 @@ function useTrackingUbicacion(userId, activo) {
         activo: true
       };
       fbWrite(`ubicaciones/${userId}`, data);
+      // Si el vendedor tiene un código de billetero diferente a su userId,
+      // también subimos ahí para que el comprador siempre encuentre el GPS
+      // independientemente de cuál ID quedó guardado en el pedido.
+      if (extraUserId && extraUserId !== userId) {
+        fbWrite(`ubicaciones/${extraUserId}`, data);
+      }
     };
 
-    // Primera ubicación inmediata
     navigator.geolocation.getCurrentPosition(enviarUbicacion, (err) => {
       console.warn("GPS error:", err.message);
     }, { enableHighAccuracy: true, timeout: 10000 });
 
-    // Watch continuo (alta precisión)
     watchId = navigator.geolocation.watchPosition(enviarUbicacion, (err) => {
       console.warn("GPS watch error:", err.message);
     }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 });
 
-    // Marcar inactivo al desmontar
     return () => {
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
       fbUpdate(`ubicaciones/${userId}`, { activo: false });
+      if (extraUserId && extraUserId !== userId) {
+        fbUpdate(`ubicaciones/${extraUserId}`, { activo: false });
+      }
     };
-  }, [userId, activo]);
+  }, [userId, activo, extraUserId]);
 }
 
 // Alias por compatibilidad
@@ -1916,15 +1922,18 @@ function TableroScreen({ vendor, cart, setCart, nav, vendorActiveSorteo=null }) 
       if(ex) return prev.map(i=>i.id===id?{...i,qty:Math.min(i.qty+qty,getAvail(item))}:i);
       return [...prev,{
         id,
-        vendorId:vendor.id,
-        vendor:vendor.name,
-        // userId del vendedor: para vendedores reales viene en vendor.userId,
-        // para demos hardcoded inferimos del v.id (V001=Carlos, V002=Rosa).
+        vendorId: vendor.id,
+        vendor:   vendor.name,
+        // userId del vendedor para localizar su GPS en Firebase (/ubicaciones/{userId}).
+        // Prioridad: 1) vendor.userId (real user ID de Firebase/storage)
+        //            2) IDs hardcoded para demos Carlos/Rosa
+        //            3) vendor.id como fallback (código billetero, ej "23345")
+        // NUNCA cae a "vendedor_carlos" para vendedores reales — eso causaba
+        // que el TrackingScreen leyera la ubicación de Carlos en vez del real.
         vendorUserId: vendor.userId
           || (vendor.id === 1 || vendor.id === "V001" ? "vendedor_carlos"
             : vendor.id === 2 || vendor.id === "V002" ? "vendedor_rosa"
-            : "vendedor_carlos"),
-        // Zona/lugar real del vendedor para mostrar al comprador en el mapa
+            : String(vendor.id)),   // ← usa el código del vendedor real
         vendorZone: vendor.zone || "",
         type, num:item.n, qty, price,
         sorteo:vendor.sorteo, maxQty:getAvail(item),
@@ -2316,14 +2325,52 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
   const [addr,setAddr]=useState(ADDRESSES[0]);
   const [pay,setPay]=useState("efectivo");
   const [step,setStep]=useState(1);
-  // ─── NUEVO: Ubicación GPS del comprador ───
   const [usarGPS, setUsarGPS] = useState(false);
-  const [ubicGPS, setUbicGPS] = useState(null);  // {lat, lng, precision}
+  const [ubicGPS, setUbicGPS] = useState(null);
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsError, setGpsError] = useState(null);
-  const [textoUbicacion, setTextoUbicacion] = useState(""); // referencia adicional (ej: "Apto 5B")
+  const [textoUbicacion, setTextoUbicacion] = useState("");
 
-  // Capturar GPS del comprador
+  // ─── GPS REAL DEL VENDEDOR para cálculo correcto del delivery fee ─────────
+  // El error de "14.9 km Zona lejana" para Israel venía de usar getVendorCoords
+  // que devuelve Calle 50/San Francisco (Carlos demo) para vendedores desconocidos.
+  // Aquí leemos el GPS REAL del vendedor desde Firebase para calcular correctamente.
+  const vendorIdCart    = cart[0]?.vendorId    || "V001";
+  const vendorUserIdCart = cart[0]?.vendorUserId || null;
+  const vendorStaticCart = getVendorCoords(vendorIdCart);
+
+  const [vendorRealCoords, setVendorRealCoords] = useState({
+    lat: vendorStaticCart.lat,
+    lng: vendorStaticCart.lng,
+    loaded: false,
+  });
+
+  useEffect(() => {
+    if (!vendorUserIdCart && !vendorIdCart) return;
+    let active = true;
+    const cargarCoordsVendedor = async () => {
+      // Intentar leer GPS del vendedor desde Firebase (puede estar en varios paths)
+      const idsToTry = [vendorUserIdCart, String(vendorIdCart)].filter(Boolean);
+      for (const uid of idsToTry) {
+        try {
+          const ubic = await fbRead(`ubicaciones/${uid}`);
+          if (ubic?.lat && ubic?.lng) {
+            const ageMs = Date.now() - (ubic.timestamp || 0);
+            // GPS reciente (< 2 horas)
+            if (ageMs < 2 * 60 * 60 * 1000 && active) {
+              setVendorRealCoords({ lat: ubic.lat, lng: ubic.lng, loaded: true, fuente: "GPS" });
+              return;
+            }
+          }
+        } catch(e) {}
+      }
+      // Si no hay GPS, mantener las estáticas (solo correctas para V001/V002)
+      if (active) setVendorRealCoords({ lat: vendorStaticCart.lat, lng: vendorStaticCart.lng, loaded: true, fuente: "static" });
+    };
+    cargarCoordsVendedor();
+    return () => { active = false; };
+  }, [vendorUserIdCart, vendorIdCart]);
+
   const capturarGPS = async () => {
     setGpsLoading(true);
     setGpsError(null);
@@ -2345,19 +2392,19 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
   const subtotal=cart.reduce((a,i)=>a+i.price*i.qty,0);
   const serviceFee=1.00;
 
-  // ─── Cálculo dinámico de delivery por distancia ───
-  // Origen: ubicación del vendedor del primer item del carrito
+  // ─── Cálculo dinámico de delivery por distancia REAL ───
+  // Origen: GPS real del vendedor (leído de Firebase) o coords estáticas (solo demos)
   // Destino: GPS actual del comprador (si activo) o coords de la dirección guardada
-  const vendorIdCart = cart[0]?.vendorId || "V001";
-  const vendorCoordsCart = getVendorCoords(vendorIdCart);
   const destLat = usarGPS && ubicGPS ? ubicGPS.lat : (addr.lat || 8.9824);
   const destLng = usarGPS && ubicGPS ? ubicGPS.lng : (addr.lng || -79.5199);
-  const distanciaKm = calcularDistancia(vendorCoordsCart.lat, vendorCoordsCart.lng, destLat, destLng);
+  const distanciaKm = calcularDistancia(vendorRealCoords.lat, vendorRealCoords.lng, destLat, destLng);
   const deliveryInfo = calcDeliveryFee(distanciaKm);
   const deliveryFee = typeof deliveryInfo === 'object' ? deliveryInfo.fee : deliveryInfo;
   const deliveryLabel = typeof deliveryInfo === 'object' ? deliveryInfo.label : "Estándar";
   const total=subtotal+serviceFee+deliveryFee;
   const totals=calcOrderTotals(subtotal.toFixed(2), deliveryFee.toFixed(2), '0');
+  // Indicar si el cálculo de distancia es real (GPS vendedor) o aproximado (estático)
+  const distanciaFuente = vendorRealCoords.fuente === "GPS" ? "📡 GPS real" : "📌 Aprox.";
   const METHODS=[
     {id:"efectivo",icon:"💵",l:"Efectivo",sub:"El repartidor trae cambio"},
     {id:"yappy",   icon:"📱",l:"Yappy · Banco General",sub:"Pago QR — sin comisión bancaria"},
@@ -2608,7 +2655,7 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
           <div className="div"/>
           {[
             {l:"Service fee (App)",v:`$${serviceFee.toFixed(2)}`,sub:null},
-            {l:"Delivery",v:`$${deliveryFee.toFixed(2)}`,sub:`${deliveryLabel} · ${distanciaKm.toFixed(1)} km`},
+            {l:"Delivery",v:`$${deliveryFee.toFixed(2)}`,sub:`${deliveryLabel} · ${distanciaKm.toFixed(1)} km · ${distanciaFuente}`},
           ].map(({l,v,sub})=>(
             <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:5,alignItems:"flex-start"}}>
               <div style={{flex:1}}>
@@ -2700,31 +2747,52 @@ function TrackingScreen({ order }) {
     ? { lat: order.deliveryAddress.lat, lng: order.deliveryAddress.lng }
     : { lat: 8.9824, lng: -79.5199 };
 
-  // ─── Coordenadas del vendedor (ubicación REAL desde Firebase, aproximada por privacidad) ───
-  // Prioridad de fuentes:
-  //   1. GPS en vivo del vendedor desde Firebase (más reciente)
-  //   2. Coords guardadas con el pedido (vendorLat/vendorLng al momento de crear)
-  //   3. Coords estáticas del lookup (solo demos legacy V001/V002)
-  const vendedorIdReal = order?.vendorUserId || "vendedor_carlos";
-  const ubicVendedorFB = useUbicacionUsuario(vendedorIdReal);
-  const vendorStatic = getVendorCoords(order?.vendorId || "V001");
+  // ─── Coordenadas del vendedor (SOLO GPS real — nunca mostrar coords demo) ───
+  const vendedorIdReal   = order?.vendorUserId || null;
+  const vendedorCodigo   = order?.vendorId ? String(order.vendorId) : null;
+  // Escuchar GPS en AMBOS paths por si el pedido guardó uno u otro
+  const ubicVendedorFB   = useUbicacionUsuario(vendedorIdReal);
+  const ubicVendedorCod  = useUbicacionUsuario(
+    vendedorCodigo !== vendedorIdReal ? vendedorCodigo : null
+  );
+  // Usar el GPS más reciente disponible
+  const ubicVendedorReal = (() => {
+    const a = ubicVendedorFB;
+    const b = ubicVendedorCod;
+    if (!a && !b) return null;
+    if (!a) return b;
+    if (!b) return a;
+    return (a.timestamp || 0) >= (b.timestamp || 0) ? a : b;
+  })();
 
-  // Cuando hay GPS en vivo, derivamos un texto de zona aproximada del CORREGIMIENTO real
-  // del vendedor (de su perfil), no del campo estático "zone" que apunta a otra zona.
-  // El profile.lugarVende generalmente refleja "Calle X, Corregimiento" donde realmente está.
-  const zonaAproxFromGPS = order?.vendorZone || order?.vendorLugar || vendorStatic.zone;
+  const vendorStaticName    = order?.vendor || "Vendedor";
+  const vendorStaticAddress = order?.vendorAddress || order?.vendorLugar || "";
+  const vendorStaticPhone   = order?.vendorPhone || "";
+  const vendorStaticZone    = order?.vendorZone || "";
 
-  let vendorCoords;
-  if (ubicVendedorFB && ubicVendedorFB.lat && ubicVendedorFB.lng) {
-    // Prioridad 1: GPS en vivo (vendedor activo ahora)
-    vendorCoords = { lat: ubicVendedorFB.lat, lng: ubicVendedorFB.lng, zone: zonaAproxFromGPS, name: vendorStatic.name, address: vendorStatic.address, phone: vendorStatic.phone, fuente: "GPS" };
+  let vendorCoords = null;
+  if (ubicVendedorReal?.lat && ubicVendedorReal?.lng) {
+    vendorCoords = {
+      lat: ubicVendedorReal.lat, lng: ubicVendedorReal.lng,
+      zone: vendorStaticZone, name: vendorStaticName,
+      address: vendorStaticAddress, phone: vendorStaticPhone,
+      fuente: "GPS"
+    };
   } else if (order?.vendorLat && order?.vendorLng) {
-    // Prioridad 2: coords guardadas con el pedido (al momento de crearlo)
-    vendorCoords = { lat: order.vendorLat, lng: order.vendorLng, zone: zonaAproxFromGPS, name: vendorStatic.name, address: vendorStatic.address, phone: vendorStatic.phone, fuente: "order" };
-  } else {
-    // Prioridad 3: lookup estático (demos legacy)
-    vendorCoords = { ...vendorStatic, fuente: "static" };
+    vendorCoords = {
+      lat: order.vendorLat, lng: order.vendorLng,
+      zone: vendorStaticZone, name: vendorStaticName,
+      address: vendorStaticAddress, phone: vendorStaticPhone,
+      fuente: "order"
+    };
+  } else if (order?.vendorId === "V001" || order?.vendorId === 1) {
+    const sc = getVendorCoords("V001");
+    vendorCoords = { ...sc, fuente: "static" };
+  } else if (order?.vendorId === "V002" || order?.vendorId === 2) {
+    const sc = getVendorCoords("V002");
+    vendorCoords = { ...sc, fuente: "static" };
   }
+  // Para cualquier otro vendedor real sin GPS: vendorCoords === null
 
   // Estado: ¿ya hay un repartidor asignado y en camino al vendedor?
   // pickupStarted = repartidor presionó "Iniciar recogida" → ya está en camino al vendedor
@@ -2752,26 +2820,22 @@ function TrackingScreen({ order }) {
   // ▸ NO mostramos marker exacto del vendedor (solo el círculo + un marker invisible
   //   para el popup informativo, ubicado en el centro del círculo desplazado).
   if (!repartidorActivo && order && (order.status === "PENDIENTE" || order.status === "APROBADO")) {
-    // Offset determinista por orderId: ~150-300m en cualquier dirección
-    const seed = (order.id || "CH-2400").split("").reduce((s,c)=>s+c.charCodeAt(0),0);
-    const angRad = (seed % 360) * Math.PI / 180;
-    const distOffsetDeg = 0.0020 + ((seed * 13) % 100) / 100000; // ~220-330m
-    const centroDesplazadoLat = vendorCoords.lat + Math.sin(angRad) * distOffsetDeg;
-    const centroDesplazadoLng = vendorCoords.lng + Math.cos(angRad) * distOffsetDeg;
-
-    circles.push({
-      lat: centroDesplazadoLat, lng: centroDesplazadoLng,
-      radius: 900,                  // 900m de radio, área amplia tipo Airbnb
-      color: '#00E5A0',
-      label: `🏪 Zona del vendedor`,
-    });
-    // Marker invisible (radio 0) solo para que el popup aparezca al tocar el círculo
-    markers.push({
-      type: 'vendedor', lat: centroDesplazadoLat, lng: centroDesplazadoLng,
-      label: 'Zona aproximada',
-      hidden: true,                 // no renderizar el icono del marker
-      popup: `<b>🏪 ${order?.vendor || vendorCoords.name || 'Vendedor'}</b><br/>📍 ${vendorCoords.zone}<br/><i>Ubicación aproximada por privacidad</i>${vendorCoords.fuente === "GPS" ? '<br/>📡 Posición en vivo' : ''}`
-    });
+    if (vendorCoords) {
+      // Tenemos GPS real del vendedor — mostrar círculo aproximado (estilo Airbnb)
+      const seed = (order.id || "CH-2400").split("").reduce((s,c)=>s+c.charCodeAt(0),0);
+      const angRad = (seed % 360) * Math.PI / 180;
+      const distOffsetDeg = 0.0020 + ((seed * 13) % 100) / 100000;
+      const centroDesplazadoLat = vendorCoords.lat + Math.sin(angRad) * distOffsetDeg;
+      const centroDesplazadoLng = vendorCoords.lng + Math.cos(angRad) * distOffsetDeg;
+      circles.push({ lat: centroDesplazadoLat, lng: centroDesplazadoLng, radiusM: 900, color: "#FFCC33" });
+      markers.push({
+        type: 'vendedor', lat: centroDesplazadoLat, lng: centroDesplazadoLng,
+        popup: `<b>🏪 ${vendorCoords.name}</b><br/>📍 ${vendorCoords.zone || "Zona del vendedor"}<br/><small>Ubicación aproximada</small>`,
+        label: "Zona del vendedor"
+      });
+    }
+    // Si vendorCoords === null: no mostramos nada del vendedor en el mapa
+    // (mejor que mostrar Bella Vista falso)
   }
 
   // Marker del repartidor: aparece SOLO cuando está EN_CAMINO
@@ -2824,15 +2888,28 @@ function TrackingScreen({ order }) {
       {/* Centrado inteligente: mientras prepara, centra en vendedor; en camino, centra en comprador */}
       <div style={{position:"relative", marginBottom:10}}>
         <MapaLeaflet
-          center={!repartidorActivo && order && (order.status === "PENDIENTE" || order.status === "APROBADO")
-            ? [vendorCoords.lat, vendorCoords.lng]
-            : [ubicComprador.lat, ubicComprador.lng]}
+          center={
+            !repartidorActivo && vendorCoords
+              ? [vendorCoords.lat, vendorCoords.lng]    // GPS real del vendedor
+              : [ubicComprador.lat, ubicComprador.lng]  // dirección del comprador (o centro Panamá)
+          }
           zoom={14}
           markers={markers}
           route={route}
           circles={circles}
           height={250}
         />
+        {/* Banner si no hay GPS del vendedor disponible */}
+        {!repartidorActivo && !vendorCoords && order && (order.status === "PENDIENTE" || order.status === "APROBADO") && (
+          <div style={{position:"absolute",top:10,right:10,left:10,background:"rgba(244,196,48,.92)",borderRadius:9,padding:"6px 11px",zIndex:600}}>
+            <div style={{fontSize:10,color:"#08101E",fontWeight:800}}>
+              📍 Ubicación del vendedor no disponible aún
+            </div>
+            <div style={{fontSize:9,color:"rgba(8,16,30,.7)",marginTop:2}}>
+              El vendedor debe tener la app abierta y GPS activo para que aparezca su zona
+            </div>
+          </div>
+        )}
         <div style={{position:"absolute",top:10,left:10,background:"rgba(8,17,31,.92)",borderRadius:9,padding:"6px 11px",border:`1px solid ${order?.status==="ENTREGADO"?"rgba(0,229,160,.4)":order?.status==="EN_CAMINO"?"rgba(244,196,48,.4)":"rgba(147,173,204,.3)"}`,zIndex:500,pointerEvents:'none'}}>
           <div style={{fontSize:10,color:order?.status==="ENTREGADO"?"var(--green)":"var(--gold)",fontWeight:800}}>
             {order?.status==="ENTREGADO"?"✅ ENTREGADO":
@@ -6960,7 +7037,9 @@ function VendedorHome({ authUser=null, billetes=[], setBilletes, chances=[], set
   // Se usa para que el comprador y el repartidor sepan dónde está exactamente
   // (no la zona estática hardcoded). Si el navegador no tiene permiso GPS,
   // el comprador verá las coords aproximadas del corregimiento del perfil.
-  useTrackingUbicacion(vendorUserId, true);
+  // El vendedor sube GPS a ubicaciones/{authUser.id} Y a ubicaciones/{vendorCode}
+  // para que el comprador siempre encuentre el GPS sin importar qué ID guardó el pedido.
+  useTrackingUbicacion(vendorUserId, true, vendorCode);
 
   // ─── SINCRONIZACIÓN DEL SORTEO ACTIVO POR VENDEDOR ───
   // Cada vendedor publica su sorteo activo en su propio path Firebase.
