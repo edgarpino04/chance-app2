@@ -8641,6 +8641,15 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
     const asignado = o.assignedRepartidorId || (o.status === "APROBADO" || o.status === "PENDIENTE" ? null : "repartidor_juan");
     return !asignado || asignado === repartidorUserId;
   };
+
+  // Pedidos descartados por este repartidor (solo en su dispositivo)
+  const [dismissedOrders, setDismissedOrders] = useState([]);
+  useEffect(() => {
+    window.storage.get(`repartidor_dismissed_${repartidorUserId}`)
+      .then(r => { if (r?.value) setDismissedOrders(JSON.parse(r.value)); })
+      .catch(()=>{});
+  }, [repartidorUserId]);
+
   // Pedidos descartados por este repartidor se ocultan de su vista
   const noDescartado = o => !dismissedOrders.includes(o.id);
   const myOrders        = orders.filter(o => esMioR(o) && noDescartado(o));
@@ -8658,13 +8667,6 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
   // ─── TRACKING GPS EN VIVO ───
   // Se activa automáticamente cuando el repartidor tiene al menos 1 entrega EN_CAMINO
   // Envía la ubicación a Firebase cada vez que cambia (watchPosition)
-  // Pedidos descartados por este repartidor (solo en su dispositivo)
-  const [dismissedOrders, setDismissedOrders] = useState([]);
-  useEffect(() => {
-    window.storage.get(`repartidor_dismissed_${repartidorUserId}`)
-      .then(r => { if (r?.value) setDismissedOrders(JSON.parse(r.value)); })
-      .catch(()=>{});
-  }, [repartidorUserId]);
 
   const tieneEntregaActiva = inTransitOrders.length > 0;
   useTrackingUbicacion(repartidorUserId, tieneEntregaActiva);
