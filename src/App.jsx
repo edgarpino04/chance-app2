@@ -462,6 +462,36 @@ function RepartidorMapa({ orders = [], repartidorId = "repartidor_juan" }) {
   // Por defecto centrado en Panamá ciudad
   const center = ubicMia ? [ubicMia.lat, ubicMia.lng] : [8.9824, -79.5199];
 
+  // GPS REAL de los vendedores: leer Firebase /ubicaciones/{userId} para cada pedido
+  // Sin esto, todos los vendedores reales aparecían en Calle 50 (coords de Carlos)
+  const [vendorGPS, setVendorGPS] = useState({});
+  useEffect(() => {
+    let active = true;
+    const cargar = async () => {
+      const result = {};
+      for (const o of orders) {
+        const ids = [o.vendorUserId, String(o.vendorId)].filter(Boolean);
+        for (const uid of ids) {
+          if (result[o.id]) break; // ya encontramos GPS para este pedido
+          try {
+            const ubic = await fbRead(`ubicaciones/${uid}`);
+            if (ubic?.lat && ubic?.lng) {
+              const ageMs = Date.now() - (ubic.timestamp || 0);
+              // GPS fresco (< 2 horas)
+              if (ageMs < 2 * 60 * 60 * 1000) {
+                result[o.id] = { lat: ubic.lat, lng: ubic.lng };
+              }
+            }
+          } catch(e) {}
+        }
+      }
+      if (active) setVendorGPS(result);
+    };
+    cargar();
+    const t = setInterval(cargar, 15000);
+    return () => { active = false; clearInterval(t); };
+  }, [orders.map(o => o.id).join(",")]);
+
   const markers = [];
   // Lista de puntos para dibujar la ruta sugerida (mi posición → vendedor → cliente)
   const routePoints = [];
@@ -480,11 +510,33 @@ function RepartidorMapa({ orders = [], repartidorId = "repartidor_juan" }) {
   //                        → el repartidor ve el recorrido completo planeado
   //   - EN_CAMINO (dropoff): mostrar SOLO CLIENTE (ya recogió, va a entregar)
   orders.forEach((o, i) => {
-    // Coords del vendedor: prioridad GPS guardado en orden > coords static
-    const vStatic = getVendorCoords(o.vendorId || "V001");
-    const vLat = o.vendorLat || vStatic.lat;
-    const vLng = o.vendorLng || vStatic.lng;
-    const vName = vStatic.name;
+    // Coords del vendedor — prioridad:
+    // 1. GPS en vivo desde Firebase (vendorGPS state)
+    // 2. Coords guardadas en el pedido (vendorLat/vendorLng)
+    // 3. Coords estáticas SOLO si es Carlos demo (V001) o Rosa demo (V002)
+    const esVendedorDemo = (o.vendorId === "V001" || o.vendorId === 1 ||
+                            o.vendorId === "V002" || o.vendorId === 2);
+    let vLat, vLng, vName, vAddr;
+    const gpsLive = vendorGPS[o.id];
+    if (gpsLive) {
+      vLat = gpsLive.lat;
+      vLng = gpsLive.lng;
+      vName = o.vendor || "Vendedor";
+      vAddr = o.vendorZone || o.vendorLugar || "Ubicación según GPS";
+    } else if (o.vendorLat && o.vendorLng) {
+      vLat = o.vendorLat;
+      vLng = o.vendorLng;
+      vName = o.vendor || "Vendedor";
+      vAddr = o.vendorZone || o.vendorLugar || "Posición guardada";
+    } else if (esVendedorDemo) {
+      const vStatic = getVendorCoords(o.vendorId);
+      vLat = vStatic.lat; vLng = vStatic.lng;
+      vName = vStatic.name; vAddr = vStatic.address;
+    } else {
+      // Vendedor real sin GPS disponible — no marcamos su ubicación en el mapa
+      return; // saltarse este pedido en el mapa hasta que aparezca su GPS
+    }
+
     // Coords del cliente
     const cLat = o.deliveryAddress?.lat || o.coordinates?.lat || (8.9824 + (i * 0.005));
     const cLng = o.deliveryAddress?.lng || o.coordinates?.lng || (-79.5199 + (i * 0.005));
@@ -494,7 +546,7 @@ function RepartidorMapa({ orders = [], repartidorId = "repartidor_juan" }) {
       markers.push({
         type: 'vendedor', lat: vLat, lng: vLng,
         label: `Recoger ${o.id}`,
-        popup: `<b>🏪 ${vName}</b><br/>${vStatic.address}<br/><b>1️⃣ Recoger ${o.id}</b>`
+        popup: `<b>🏪 ${vName}</b><br/>${vAddr}<br/><b>1️⃣ Recoger ${o.id}</b>`
       });
       markers.push({
         type: 'casa', lat: cLat, lng: cLng,
@@ -2899,8 +2951,24 @@ function TrackingScreen({ order }) {
         </div>
       )}
 
-      {/* Mapa real con Leaflet + tracking en vivo */}
+      {/* Sin pedido activo: estado vacío amigable (sin mapa de Bella Vista por defecto) */}
+      {!order && (
+        <div style={{background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:14,padding:"50px 24px",textAlign:"center",marginBottom:12}}>
+          <div style={{fontSize:56,marginBottom:14,opacity:.7}}>🛵</div>
+          <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:6}}>SIN PEDIDOS ACTIVOS</div>
+          <div style={{fontSize:12,color:"var(--muted)",lineHeight:1.5,maxWidth:280,margin:"0 auto"}}>
+            Cuando hagas un pedido aparecerá aquí el seguimiento en vivo con la ubicación del vendedor y tu dirección de entrega.
+          </div>
+          <button onClick={()=>{ window.dispatchEvent(new CustomEvent("nav-buscar")); }}
+            style={{marginTop:18,padding:"11px 24px",borderRadius:11,background:"linear-gradient(135deg,var(--gold),#F4A400)",border:"none",color:"#08101E",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+            Buscar vendedores
+          </button>
+        </div>
+      )}
+
+      {/* Mapa real con Leaflet + tracking en vivo — SOLO si hay pedido activo */}
       {/* Centrado inteligente: mientras prepara, centra en vendedor; en camino, centra en comprador */}
+      {order && (
       <div style={{position:"relative", marginBottom:10}}>
         <MapaLeaflet
           center={
@@ -2915,7 +2983,7 @@ function TrackingScreen({ order }) {
           height={250}
         />
         {/* Banner si no hay GPS del vendedor disponible */}
-        {!repartidorActivo && !vendorCoords && order && (order.status === "PENDIENTE" || order.status === "APROBADO") && (
+        {!repartidorActivo && !vendorCoords && (order.status === "PENDIENTE" || order.status === "APROBADO") && (
           <div style={{position:"absolute",top:10,right:10,left:10,background:"rgba(244,196,48,.92)",borderRadius:9,padding:"6px 11px",zIndex:600}}>
             <div style={{fontSize:10,color:"#08101E",fontWeight:800}}>
               📍 Ubicación del vendedor no disponible aún
@@ -2941,6 +3009,7 @@ function TrackingScreen({ order }) {
           </div>
         )}
       </div>
+      )}
       {/* Tarjeta del Repartidor: SOLO visible cuando está asignado (EN_CAMINO o ENTREGADO) */}
       {repartidorActivo && (() => {
         const repName  = order?.assignedRepartidorName || "Juan Rodríguez";
@@ -3000,6 +3069,8 @@ function TrackingScreen({ order }) {
         </div>
       </div>
       )}
+      {/* Tarjeta de estado del pedido — solo visible si hay pedido activo */}
+      {order && (
       <div className="card">
         <div className="sec" style={{marginBottom:12}}>Estado del Pedido</div>
         {statusSteps.map((s,i,arr)=>{
@@ -3024,16 +3095,12 @@ function TrackingScreen({ order }) {
           );
         })}
       </div>
-      {!order&&(
-        <div style={{textAlign:"center",padding:"16px 0",opacity:.5}}>
-          <div style={{fontSize:11,color:"var(--muted)"}}>Realiza un pedido para ver el seguimiento en vivo</div>
-        </div>
       )}
     </div>
   );
 }
 
-function HistorialScreen({ nav, orders=[], onClientApprove, onClientReject, onProposeReplacement, sharedVendor }) {
+function HistorialScreen({ nav, orders=[], onClientApprove, onClientReject, onProposeReplacement, onClientCancel, onVerifyCancel, sharedVendor }) {
   const [f,setF]=useState("todos");
   const [replacingOrder, setReplacingOrder] = useState(null);  // orderId buscando reemplazo
   const [replaceNum, setReplaceNum]         = useState("");
@@ -3294,6 +3361,23 @@ function HistorialScreen({ nav, orders=[], onClientApprove, onClientReject, onPr
                 <span style={{fontSize:11,color:"var(--gold)",fontWeight:700}}>🛵 Ver seguimiento en vivo</span>
                 <Ic n="chevR" s={13} c="var(--gold)"/>
               </div>
+            )}
+
+            {/* BOTÓN CANCELAR — solo para pedidos activos que aún no fueron entregados */}
+            {isActive && !isModified && !isReplSent && onClientCancel && (
+              <button onClick={()=>{
+                const verif = onVerifyCancel ? onVerifyCancel(o) : { puedeCancelar: true };
+                if (!verif.puedeCancelar) { window.alert(verif.motivo); return; }
+                const msgConfirm = verif.bloqueoSiCancela
+                  ? `⚠️ ATENCIÓN: ${verif.razonBloqueo}\n\n¿Estás seguro que quieres cancelar el pedido ${o.id}?`
+                  : `¿Cancelar el pedido ${o.id}? Los números reservados se liberarán.`;
+                if (window.confirm(msgConfirm)) {
+                  onClientCancel(o.id);
+                }
+              }}
+                style={{marginTop:7,width:"100%",padding:"9px",background:"rgba(255,75,110,.08)",border:"1px solid rgba(255,75,110,.25)",borderRadius:9,color:"var(--red)",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                ❌ Cancelar pedido
+              </button>
             )}
           </div>
         );
@@ -9043,18 +9127,23 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
           // FASE 1 — PICKUP: status APROBADO → Repartidor va al VENDEDOR a recoger
           // FASE 2 — DROPOFF: status EN_CAMINO → Repartidor lleva al CLIENTE
           const fase = isApproved ? "pickup" : isInTransit ? "dropoff" : isDelivered ? "done" : "espera";
-          // Datos del vendedor: prioridad a los datos REALES del pedido (que se
-          // guardaron al hacer el pedido) sobre el lookup estático que solo
-          // conoce los demos V001/V002. Sin esto, todos los pedidos de
-          // vendedores reales mostraban "Carlos Medina · Calle 50".
-          const vendorStatic = getVendorCoords(o.vendorId || "V001");
+          // Datos del vendedor: prioridad a los datos REALES del pedido. NUNCA cae
+          // a "Calle 50, Carlos Medina" para vendedores reales — eso causaba que
+          // todos los pedidos mostraran la dirección de Carlos demo.
+          const esVendedorDemo = (o.vendorId === "V001" || o.vendorId === 1 ||
+                                  o.vendorId === "V002" || o.vendorId === 2);
+          const esCarlosNombre = (o.vendor || "").toLowerCase().includes("carlos");
+          const usarStatic = esVendedorDemo && (esCarlosNombre || !o.vendor);
+          const vendorStatic = usarStatic ? getVendorCoords(o.vendorId) : null;
           const vendorInfo = {
-            name:    o.vendor      || vendorStatic.name,
-            phone:   o.vendorPhone || vendorStatic.phone,
-            address: o.vendorAddress || o.vendorLugar || vendorStatic.address,
-            zone:    o.vendorZone  || vendorStatic.zone,
-            lat:     o.vendorLat   || vendorStatic.lat,
-            lng:     o.vendorLng   || vendorStatic.lng,
+            name:    o.vendor      || (vendorStatic ? vendorStatic.name : "Vendedor"),
+            phone:   o.vendorPhone || (vendorStatic ? vendorStatic.phone : ""),
+            // Para vendedores reales sin dirección detallada: usar zona en vez de
+            // la dirección hardcoded de Carlos.
+            address: o.vendorAddress || o.vendorLugar || (vendorStatic ? vendorStatic.address : (o.vendorZone || "Ubicación según GPS del vendedor")),
+            zone:    o.vendorZone  || (vendorStatic ? vendorStatic.zone : ""),
+            lat:     o.vendorLat   || (vendorStatic ? vendorStatic.lat : null),
+            lng:     o.vendorLng   || (vendorStatic ? vendorStatic.lng : null),
           };
 
           return (
@@ -10120,6 +10209,31 @@ function App({ forceRole=null, authUser=null, onLogout=null,
   /** Crear UN solo pedido consolidado con todos los items del carrito */
   const placeOrder = async (items, method, addr, deliveryMeta) => {
     if (!items?.length) return null;
+
+    // ── VERIFICACIÓN DE BLOQUEO ──────────────────────────────────────────
+    // Si el cliente tiene un bloqueo activo, solo puede pedir si:
+    //   a) Paga la penalidad pendiente, o
+    //   b) Su pedido es con pago Yappy (anticipado)
+    if (authUser?.id) {
+      try {
+        const bloqueo = await fbRead(`bloqueos/${authUser.id}`);
+        if (bloqueo && !bloqueo.liberado) {
+          if (method !== "YAPPY" && method !== "yappy") {
+            window.alert(
+              `⛔ Tu cuenta tiene un bloqueo por cancelación previa.\n\n` +
+              `Para hacer este pedido tienes 2 opciones:\n` +
+              `  1. Paga la penalidad pendiente: $${(bloqueo.montoPenalidad||5).toFixed(2)}\n` +
+              `  2. Realiza este pedido pagando con YAPPY (pago anticipado)\n\n` +
+              `Tu cuenta se liberará automáticamente cuando completes el pedido en efectivo o pagues la penalidad.`
+            );
+            return null;
+          }
+          // Si paga con Yappy: marcar el pedido para liberar el bloqueo al entregarlo
+          // (se procesa en confirmarEntrega del repartidor)
+        }
+      } catch(e) {}
+    }
+
     const id = `CH-${2408 + sharedOrders.length}`;
     const lotteryTotal = items.reduce((s,i) => s + i.price * i.qty, 0);
     // Datos del vendedor para tracking — incluyen su corregimiento real (no la zone hardcoded)
@@ -10240,6 +10354,120 @@ function App({ forceRole=null, authUser=null, onLogout=null,
   };
 
   /** Cliente aprueba la modificación del vendedor → directo al repartidor */
+  // ═══════════════════════════════════════════════════════════════════════
+  // CANCELACIÓN DE PEDIDO POR PARTE DEL CLIENTE
+  // ═══════════════════════════════════════════════════════════════════════
+  // Reglas operativas:
+  //   1. Si el pedido NO ha sido recogido por el repartidor → cancelación libre
+  //   2. Si ya fue recogido (pickupStarted=true o EN_CAMINO) → bloqueo automático
+  //      del cliente hasta que pague penalidad o haga próximo pedido con
+  //      pago anticipado (Yappy).
+  //   3. Solo se permiten cancelaciones hasta 3 HORAS antes del sorteo.
+  //      Después de esa ventana: el cliente queda bloqueado.
+  // ═══════════════════════════════════════════════════════════════════════
+  const HORAS_LIMITE_CANCELACION = 3;
+  const PENALIDAD_USD = 5.00;
+
+  /**
+   * Verifica si el cliente puede cancelar un pedido.
+   * @returns {object} { puedeCancelar, motivo, bloqueoSiCancela, razonBloqueo }
+   */
+  const verificarCancelacion = (order) => {
+    if (!order) return { puedeCancelar: false, motivo: "Pedido no encontrado" };
+    if (order.status === "ENTREGADO") return { puedeCancelar: false, motivo: "El pedido ya fue entregado" };
+    if (order.status === "CANCELADO" || order.status === "CANCELADO_VENDEDOR") {
+      return { puedeCancelar: false, motivo: "El pedido ya está cancelado" };
+    }
+
+    // Estados que ameritan bloqueo: el producto ya está en manos del repartidor
+    const pedidoRecogido = order.pickupStarted === true || order.status === "EN_CAMINO";
+
+    // Calcular tiempo hasta el sorteo (si tenemos info del sorteo)
+    let horasRestantes = null;
+    let cercaDelSorteo = false;
+    try {
+      const sorteoFecha = order.sorteoFecha || order.sorteoActivoFecha;
+      const sorteoHora  = order.sorteoActivoHora || "15:00";
+      if (sorteoFecha) {
+        const [h, m] = sorteoHora.split(":").map(n => parseInt(n, 10));
+        const sorteoDate = new Date(sorteoFecha);
+        sorteoDate.setHours(h || 15, m || 0, 0, 0);
+        const diffMs = sorteoDate.getTime() - Date.now();
+        horasRestantes = diffMs / (1000 * 60 * 60);
+        cercaDelSorteo = horasRestantes < HORAS_LIMITE_CANCELACION && horasRestantes > 0;
+      }
+    } catch(e) {}
+
+    return {
+      puedeCancelar: true,
+      pedidoRecogido,
+      cercaDelSorteo,
+      horasRestantes,
+      bloqueoSiCancela: pedidoRecogido || cercaDelSorteo,
+      razonBloqueo: pedidoRecogido
+        ? `El repartidor ya recogió el producto. Cancelar generará bloqueo (penalidad $${PENALIDAD_USD.toFixed(2)} o próximo pedido con pago Yappy adelantado).`
+        : cercaDelSorteo
+          ? `Faltan menos de ${HORAS_LIMITE_CANCELACION} horas para el sorteo. Cancelar generará bloqueo.`
+          : null,
+    };
+  };
+
+  /**
+   * Cliente cancela su pedido. Maneja bloqueo automático según las reglas.
+   */
+  const clientCancelOrder = async (orderId) => {
+    const order = sharedOrders.find(o => o.id === orderId);
+    if (!order) return;
+    const v = verificarCancelacion(order);
+    if (!v.puedeCancelar) {
+      window.alert(v.motivo);
+      return;
+    }
+
+    // Liberar números reservados al stock
+    order?.reservedNums?.forEach(num=>{
+      setSharedBilletes(p=>p.map(b=>b.n===num?{...b,sold:Math.max(0,b.sold-1)}:b));
+      setSharedChances(p=>p.map(c=>c.n===num?{...c,sold:Math.max(0,c.sold-1)}:c));
+    });
+
+    // Marcar pedido como cancelado por cliente
+    const motivoCancel = v.pedidoRecogido
+      ? "Cancelado tras recogida — genera bloqueo"
+      : v.cercaDelSorteo
+        ? "Cancelado fuera de ventana (<3h sorteo) — genera bloqueo"
+        : "Cancelado por el cliente";
+    setSharedOrders(p=>p.map(o=>o.id!==orderId?o:{
+      ...o,
+      status: "CANCELADO",
+      cancelledAt: ts(),
+      cancelledBy: "cliente",
+      cancelReason: motivoCancel,
+      penalidadAplicada: v.bloqueoSiCancela,
+      history: [...(o.history||[]), { by: "cliente", action: motivoCancel, at: ts() }],
+    }));
+
+    // Aplicar bloqueo si corresponde
+    if (v.bloqueoSiCancela && order.customerId) {
+      const bloqueo = {
+        customerId: order.customerId,
+        customerName: order.customerName || authUser?.nombre,
+        orderId: order.id,
+        razon: v.pedidoRecogido ? "cancelacion_tras_recogida" : "cancelacion_fuera_ventana",
+        montoPenalidad: PENALIDAD_USD,
+        creadoEl: ts(),
+        creadoMs: Date.now(),
+        liberado: false,
+        proximoPedidoYappy: true, // su próximo pedido debe ser pago anticipado
+      };
+      try {
+        // Guardar bloqueo en Firebase: /bloqueos/{customerId}
+        await fbWrite(`bloqueos/${order.customerId}`, bloqueo);
+      } catch(e) { console.warn("FB bloqueo write failed:", e); }
+    }
+
+    return { bloqueado: v.bloqueoSiCancela, motivo: motivoCancel };
+  };
+
   const clientApproveModification = (orderId) => {
     setSharedOrders(p=>p.map(o=>o.id!==orderId?o:{
       ...o, status:"APROBADO", clientApprovedAt:ts(),
@@ -10375,7 +10603,27 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       assignedRepartidorName: o.assignedRepartidorName || authUser?.nombre || "Juan Rodríguez",
     };
   }));
-  const deliverOrder = id => setSharedOrders(p=>p.map(o=>o.id!==id?o:{...o,status:"ENTREGADO",deliveredAt:ts()}));
+  const deliverOrder = async (id) => {
+    const order = sharedOrders.find(o => o.id === id);
+    setSharedOrders(p=>p.map(o=>o.id!==id?o:{...o,status:"ENTREGADO",deliveredAt:ts()}));
+    // Si el cliente tenía un bloqueo y completó el pedido con Yappy (pago anticipado),
+    // se libera el bloqueo automáticamente. Pedidos en efectivo también liberan el
+    // bloqueo si llegan a entregarse exitosamente (el cliente cumplió esta vez).
+    if (order?.customerId) {
+      try {
+        const bloqueo = await fbRead(`bloqueos/${order.customerId}`);
+        if (bloqueo && !bloqueo.liberado) {
+          await fbWrite(`bloqueos/${order.customerId}`, {
+            ...bloqueo,
+            liberado: true,
+            liberadoEl: ts(),
+            liberadoOrderId: id,
+            liberadoMetodo: order.paymentMethod || "efectivo",
+          });
+        }
+      } catch(e) {}
+    }
+  };
 
   /** Vendedor cancela el pedido y notifica al comprador */
   const vendorCancelOrder = (orderId) => {
@@ -10552,6 +10800,8 @@ function App({ forceRole=null, authUser=null, onLogout=null,
         onClientApprove={clientApproveWithSound}
         onClientReject={clientRejectWithSound}
         onProposeReplacement={proposeReplacementWithSound}
+        onClientCancel={clientCancelOrder}
+        onVerifyCancel={verificarCancelacion}
         sharedVendor={sharedVendor}/>;
       case "resultados":   return <ResultadosScreen initTab="resultados"/>;
       case "verificar":    return <ResultadosScreen initTab="verificar"/>;
