@@ -2923,14 +2923,15 @@ function TrackingScreen({ order }) {
     : null;
 
   const statusSteps = [
-    {l:"Pedido confirmado",   key:"PENDIENTE",  ic:"check",  done:true},
-    {l:"Vendedor preparando", key:"APROBADO",   ic:"pkg",    done:order&&["APROBADO","EN_CAMINO","ENTREGADO"].includes(order.status)},
-    // "Repartidor asignado" se completa cuando el repartidor presiona "Iniciar recogida"
-    // (pickupStarted=true) o cuando ya pasó a EN_CAMINO/ENTREGADO
-    {l:"Repartidor asignado", key:"ASIGNADO",   ic:"truck",  done:order&&(order.pickupStarted===true||["EN_CAMINO","ENTREGADO"].includes(order.status))},
-    // "En camino" sólo cuando ya recogió y va hacia el cliente
-    {l:"En camino 🛵",        key:"EN_CAMINO",  ic:"truck",  done:order&&["EN_CAMINO","ENTREGADO"].includes(order.status), act:order?.status==="EN_CAMINO"},
-    {l:"Entregado",           key:"ENTREGADO",  ic:"check",  done:order?.status==="ENTREGADO"},
+    // PENDIENTE: el pedido fue confirmado por el comprador, espera aprobación del vendedor
+    {l:"Pedido enviado al vendedor", key:"PENDIENTE",  ic:"check",  done:true, act:order?.status==="PENDIENTE"},
+    // APROBADO: el vendedor aprobó los números y separó los billetes
+    {l:"Aprobado por el vendedor",   key:"APROBADO",   ic:"check",  done:order&&["APROBADO","EN_CAMINO","ENTREGADO"].includes(order.status), act:order?.status==="APROBADO"&&!order?.pickupStarted},
+    // ASIGNADO: el repartidor presionó "Iniciar recogida" (pickupStarted=true) o ya está EN_CAMINO/ENTREGADO
+    {l:"Repartidor en camino al vendedor", key:"ASIGNADO",   ic:"truck",  done:order&&(order.pickupStarted===true||["EN_CAMINO","ENTREGADO"].includes(order.status)), act:order?.pickupStarted===true&&order?.status==="APROBADO"},
+    // EN_CAMINO: el repartidor ya recogió el billete y va hacia el cliente
+    {l:"En camino a tu dirección 🛵", key:"EN_CAMINO",  ic:"truck",  done:order&&["EN_CAMINO","ENTREGADO"].includes(order.status), act:order?.status==="EN_CAMINO"},
+    {l:"Entregado",                   key:"ENTREGADO",  ic:"check",  done:order?.status==="ENTREGADO"},
   ];
   return (
     <div className="sc fu">
@@ -2998,7 +2999,10 @@ function TrackingScreen({ order }) {
             {order?.status==="ENTREGADO"?"✅ ENTREGADO":
              order?.status==="EN_CAMINO"&&etaMin!==null?`🛵 EN CAMINO · ${etaMin} min`:
              order?.status==="EN_CAMINO"?"🛵 EN CAMINO · activando GPS...":
-             "⏳ PREPARANDO"}
+             order?.status==="APROBADO"&&order?.pickupStarted?"🛵 REPARTIDOR EN CAMINO AL VENDEDOR":
+             order?.status==="APROBADO"?"✓ APROBADO · Esperando repartidor":
+             order?.status==="PENDIENTE"?"⏳ ESPERANDO APROBACIÓN":
+             "⏳ EN PROCESO"}
           </div>
         </div>
         {ubicRepartidor && ubicRepartidor.lat && order?.status === "EN_CAMINO" && (
@@ -10239,6 +10243,10 @@ function App({ forceRole=null, authUser=null, onLogout=null,
     // Datos del vendedor para tracking — incluyen su corregimiento real (no la zone hardcoded)
     const vendorIdOrder = items[0].vendorId || "V001";
     const vendorStaticOrder = getVendorCoords(vendorIdOrder);
+    // ¿Es un demo (Carlos V001 o Rosa V002)? Si no, no debemos usar sus
+    // datos estáticos (dirección "Calle 50...") como fallback para vendedores reales.
+    const esVendedorDemoOrder = (vendorIdOrder === "V001" || vendorIdOrder === 1 ||
+                                  vendorIdOrder === "V002" || vendorIdOrder === 2);
     // El vendorUserId se toma del primer item del carrito (etiquetado al añadirlo).
     // Fallback legacy según el código del vendedor para demos viejos.
     const vendorUserIdOrder = items[0].vendorUserId
@@ -10250,8 +10258,11 @@ function App({ forceRole=null, authUser=null, onLogout=null,
     // desde la lista de usuarios de Firebase. Si es un demo (V001/V002), se
     // mantienen los datos estáticos. Si es real, se traen los suyos.
     let vendorRealName    = items[0].vendor || vendorStaticOrder.name;
-    let vendorRealPhone   = vendorStaticOrder.phone;
-    let vendorRealAddress = vendorStaticOrder.address;
+    let vendorRealPhone   = esVendedorDemoOrder ? vendorStaticOrder.phone : "";
+    // Solo usar dirección estática para demos. Para reales, queda vacío hasta
+    // leer su perfil real desde Firebase.
+    let vendorRealAddress = esVendedorDemoOrder ? vendorStaticOrder.address : "";
+    let vendorRealZone    = items[0].vendorZone || (esVendedorDemoOrder ? vendorStaticOrder.zone : "");
     try {
       let usersData = await fbRead("users");
       if (usersData && !Array.isArray(usersData) && typeof usersData === "object") {
@@ -10264,10 +10275,19 @@ function App({ forceRole=null, authUser=null, onLogout=null,
         if (vendUser) {
           vendorRealName    = vendUser.nombre || vendorRealName;
           vendorRealPhone   = vendUser.telefono || vendorRealPhone;
+          // Aquí leemos la dirección REAL del vendedor desde su perfil:
+          // lugarVende es la dirección exacta (ej: "99 Plaza Tocumen")
           vendorRealAddress = vendUser.lugarVende || vendUser.direccion || vendorRealAddress;
+          // Zona: corregimiento o distrito si lo registró
+          vendorRealZone = vendUser.corregimiento || vendUser.distrito || vendorRealZone;
         }
       }
     } catch(e) { /* fallback */ }
+    // Si después de leer Firebase aún no hay dirección y NO es un demo, usar
+    // un texto genérico en lugar de "Calle 50, San Francisco" de Carlos.
+    if (!vendorRealAddress && !esVendedorDemoOrder) {
+      vendorRealAddress = vendorRealZone || "Dirección no registrada por el vendedor";
+    }
 
     // Intentar leer la última ubicación GPS conocida del vendedor en Firebase.
     // Si el vendedor tiene GPS activo, usamos esas coords. Si no, fallback al
@@ -10794,7 +10814,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
         onConfirm={placeOrderWithSound}/>;
       case "confirmacion": return <ConfirmacionScreen orderId={screenData?.orderId||"CH-2408"} nav={nav}/>;
       case "tracking":     return <TrackingScreen
-        order={sharedOrders.find(o=>["EN_CAMINO","APROBADO"].includes(o.status)&&(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))||null}/>;
+        order={sharedOrders.find(o=>["PENDIENTE","APROBADO","EN_CAMINO","MODIFICADO","REEMPLAZO"].includes(o.status)&&(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))||null}/>;
       case "historial":    return <HistorialScreen nav={nav}
         orders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}
         onClientApprove={clientApproveWithSound}
