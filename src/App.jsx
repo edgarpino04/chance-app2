@@ -10346,6 +10346,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       customerId: authUser?.id || "cliente_maria",
       customerName: authUser?.nombre || "Cliente",
       customerPhone: authUser?.telefono || "6555-1234",
+      _debugAuth: { authUserId: authUser?.id, authUserNombre: authUser?.nombre, ts: ts() },
       status:"PENDIENTE", round:1,          // round: número de vuelta de negociación
       history:[{by:"cliente",action:"Pedido creado",at:ts()}],
       createdAt:ts(),
@@ -10772,11 +10773,27 @@ function App({ forceRole=null, authUser=null, onLogout=null,
   };
   const activeNav = screenToNav[screen]||null;
 
+  // Helper centralizado: determina si un pedido pertenece al cliente actual.
+  // Maneja casos demo (María = demo_c con fallback legacy cliente_maria) y reales.
+  const isMyOrder = (o) => {
+    if (!o) return false;
+    const myId = authUser?.id;
+    const myEmail = authUser?.email;
+    // Caso 1: match directo por ID
+    if (myId && o.customerId === myId) return true;
+    // Caso 2: legacy/demo — María demo (demo_c) también ve pedidos con cliente_maria
+    if (myId === "demo_c" && o.customerId === "cliente_maria") return true;
+    if (!myId && o.customerId === "cliente_maria") return true;
+    // Caso 3: match por email si el customerId guarda el email (raro pero posible)
+    if (myEmail && o.customerEmail === myEmail) return true;
+    return false;
+  };
+
   const navBadge = {
     pedidos_v:    vendorActionNeeded,
     entregas_r:   approvedForDriver,
     batch_r:      approvedForDriver,
-    historial:    sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria")&&["PENDIENTE","APROBADO","EN_CAMINO","MODIFICADO","REEMPLAZO"].includes(o.status)).length,
+    historial:    sharedOrders.filter(o=>isMyOrder(o)&&["PENDIENTE","APROBADO","EN_CAMINO","MODIFICADO","REEMPLAZO"].includes(o.status)).length,
     home_cliente: modifiedForClient,
   };
 
@@ -10800,7 +10817,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       // ── CLIENTE
       case "home_cliente": return <ClienteHome cart={cart} nav={nav} authUser={authUser}
         sharedVendor={sharedVendor} activeVendors={activeVendors}
-        activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
+        activeOrders={sharedOrders.filter(isMyOrder)}/>;
       case "buscar":       return <BuscarScreen nav={nav} sharedVendor={sharedVendor} activeVendors={activeVendors}/>;
       case "suerte":       return <SuerteScreen/>
       case "explorar":     return <ExplorarScreen nav={nav} sharedVendor={sharedVendor} activeVendors={activeVendors}/>;
@@ -10814,9 +10831,9 @@ function App({ forceRole=null, authUser=null, onLogout=null,
         onConfirm={placeOrderWithSound}/>;
       case "confirmacion": return <ConfirmacionScreen orderId={screenData?.orderId||"CH-2408"} nav={nav}/>;
       case "tracking":     return <TrackingScreen
-        order={sharedOrders.find(o=>["PENDIENTE","APROBADO","EN_CAMINO","MODIFICADO","REEMPLAZO"].includes(o.status)&&(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))||null}/>;
+        order={sharedOrders.find(o=>["PENDIENTE","APROBADO","EN_CAMINO","MODIFICADO","REEMPLAZO"].includes(o.status)&&isMyOrder(o))||null}/>;
       case "historial":    return <HistorialScreen nav={nav}
-        orders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}
+        orders={sharedOrders.filter(isMyOrder)}
         onClientApprove={clientApproveWithSound}
         onClientReject={clientRejectWithSound}
         onProposeReplacement={proposeReplacementWithSound}
@@ -10889,7 +10906,7 @@ function App({ forceRole=null, authUser=null, onLogout=null,
       default:
         if (role==="vendedor")   return <VendedorHome   authUser={authUser} billetes={sharedBilletes} setBilletes={setSharedBilletes} chances={sharedChances} setChances={setSharedChances} orders={sharedOrders} onApprove={approveOrder} onModify={modifyOrderWithSound} onApproveReplacement={vendorApproveReplacementWithSound} onRejectReplacement={vendorRejectReplacementWithSound} onCancelByVendor={vendorCancelOrder} activeSorteo={vendorActiveSorteo} setActiveSorteo={setVendorActiveSorteo} initTab="tablero"/>;
         if (role==="repartidor") return <RepartidorHome authUser={authUser} orders={sharedOrders} onAssign={assignOrder} onDeliver={deliverOrder} onStartPickup={startPickupOrder} initTab="inicio"/>;
-        return <ClienteHome cart={cart} nav={nav} authUser={authUser} sharedVendor={sharedVendor} activeVendors={activeVendors} activeOrders={sharedOrders.filter(o=>(o.customerId===(authUser?.id||"cliente_maria")||o.customerId==="cliente_maria"))}/>;
+        return <ClienteHome cart={cart} nav={nav} authUser={authUser} sharedVendor={sharedVendor} activeVendors={activeVendors} activeOrders={sharedOrders.filter(isMyOrder)}/>;
     }
   };
 
