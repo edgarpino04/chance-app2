@@ -694,35 +694,128 @@ const SORTEOS_RECIENTES_SEED = [
 let SORTEOS_RECIENTES = [...SORTEOS_RECIENTES_SEED];
 
 /**
- * Devuelve la fecha del PRÓXIMO sorteo basado en la fecha del último jugado.
- * Ejemplo: si el último Miercolito fue 6 de mayo, el próximo es 13 de mayo.
+ * Calcula la fecha del PRÓXIMO sorteo dinámicamente según la fecha actual.
+ * MIERCOLITO: próximo miércoles ≥ hoy (a las 3pm)
+ * DOMINICAL: próximo domingo ≥ hoy (a las 3pm)
+ * GORDITO: segundo viernes del mes actual o del siguiente si ya pasó
+ * EXTRAORDINARIA: segundo viernes de diciembre del año actual o del siguiente
+ * @param {string} tipo - "MIERCOLITO" | "DOMINICAL" | "GORDITO" | "EXTRAORDINARIA"
+ * @returns {Date | null} fecha del próximo sorteo (al inicio del día)
+ */
+function calcularProximaFechaSorteo(tipo) {
+  const ahora = new Date();
+  const hoy = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate());
+  const hora = ahora.getHours();
+
+  // Devuelve el próximo {diaSemana} (0=domingo, 3=miércoles, 5=viernes) ≥ hoy.
+  // Si hoy es ese día pero ya pasaron las 3pm, salta al siguiente.
+  const proximoDiaSemana = (diaObjetivo) => {
+    const dia = hoy.getDay();
+    let dias = (diaObjetivo - dia + 7) % 7;
+    if (dias === 0 && hora >= 15) dias = 7;
+    const f = new Date(hoy);
+    f.setDate(f.getDate() + dias);
+    return f;
+  };
+
+  // Calcula el N-ésimo viernes de un mes específico
+  const getNthViernes = (anio, mes, n) => {
+    const primero = new Date(anio, mes, 1);
+    const offset = ((5 - primero.getDay() + 7) % 7);
+    return new Date(anio, mes, 1 + offset + (n - 1) * 7);
+  };
+
+  if (tipo === "MIERCOLITO") return proximoDiaSemana(3);
+  if (tipo === "DOMINICAL")  return proximoDiaSemana(0);
+  if (tipo === "GORDITO") {
+    let f = getNthViernes(hoy.getFullYear(), hoy.getMonth(), 2);
+    if (f < hoy || (f.getTime() === hoy.getTime() && hora >= 15)) {
+      f = getNthViernes(hoy.getFullYear(), hoy.getMonth() + 1, 2);
+    }
+    return f;
+  }
+  if (tipo === "EXTRAORDINARIA") {
+    let f = getNthViernes(hoy.getFullYear(), 11, 2); // diciembre = mes 11
+    if (f < hoy) f = getNthViernes(hoy.getFullYear() + 1, 11, 2);
+    return f;
+  }
+  return null;
+}
+
+/**
+ * Devuelve la fecha del PRÓXIMO sorteo formateada en español.
+ * Usa cálculo dinámico basado en la fecha actual del dispositivo.
  * @param {object} sorteo - Item de SORTEOS_RECIENTES
- * @returns {string} fecha formateada en español "10 de mayo de 2026"
+ * @returns {string} fecha formateada "20 de mayo de 2026"
  */
 function getProximaFecha(sorteo) {
   if (!sorteo) return "";
-  // Si proximoISO existe, lo usamos como fuente de verdad
+  const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+  // 1) Cálculo dinámico por tipo (fuente primaria de verdad)
+  const calculada = calcularProximaFechaSorteo(sorteo.tipo);
+  if (calculada) {
+    return `${calculada.getDate()} de ${meses[calculada.getMonth()]} de ${calculada.getFullYear()}`;
+  }
+
+  // 2) Fallback: proximoISO hardcodeado (si el cálculo falla)
   if (sorteo.proximoISO) {
     const d = new Date(sorteo.proximoISO);
     if (!isNaN(d.getTime())) {
-      const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
       return `${d.getDate()} de ${meses[d.getMonth()]} de ${d.getFullYear()}`;
     }
   }
-  // Si no, sumamos 7 días al último (DOMINICAL/MIERCOLITO) o usamos genérico
   return sorteo.fecha || "";
 }
 
 /**
- * Devuelve el número estimado del PRÓXIMO sorteo (último + 1).
- * @param {object} sorteo - Item de SORTEOS_RECIENTES
+ * Parsea una fecha en formato "DD Mmm YYYY" (ej. "06 May 2026") con
+ * abreviaturas de mes en español.
+ * @param {string} s
+ * @returns {Date | null}
+ */
+function parseFechaEsp(s) {
+  if (!s) return null;
+  const mesesAbr = { ene:0, feb:1, mar:2, abr:3, may:4, jun:5, jul:6, ago:7, sep:8, oct:9, nov:10, dic:11 };
+  const m = String(s).match(/^(\d{1,2})\s+([a-zA-ZáéíóúÁÉÍÓÚ]+)\.?\s+(\d{4})$/);
+  if (!m) return null;
+  const dia = parseInt(m[1], 10);
+  const mesKey = m[2].toLowerCase().slice(0, 3).replace(/[áéíóú]/g, c => ({á:"a",é:"e",í:"i",ó:"o",ú:"u"}[c]));
+  const mes = mesesAbr[mesKey];
+  const anio = parseInt(m[3], 10);
+  if (mes == null || isNaN(dia) || isNaN(anio)) return null;
+  return new Date(anio, mes, dia);
+}
+
+/**
+ * Devuelve el número estimado del PRÓXIMO sorteo.
+ * Calcula cuántos sorteos del tipo han transcurrido entre la fecha del último
+ * sorteo registrado y la fecha del próximo (calculada dinámicamente).
+ * Esto mantiene la numeración correcta aunque pasen varias semanas sin actualizar
+ * los datos seed.
+ * @param {object} sorteo - Item de SORTEOS_RECIENTES (último registrado del tipo)
  * @returns {string} número del próximo sorteo
  */
 function getProximoSorteoN(sorteo) {
   if (!sorteo?.sorteoN) return "";
   const n = parseInt(sorteo.sorteoN, 10);
   if (isNaN(n)) return sorteo.sorteoN;
-  return String(n + 1);
+
+  const fechaUltimo  = parseFechaEsp(sorteo.fecha);
+  const proximaFecha = calcularProximaFechaSorteo(sorteo.tipo);
+  if (!fechaUltimo || !proximaFecha) return String(n + 1);
+
+  const diffDias = Math.round((proximaFecha - fechaUltimo) / (1000 * 60 * 60 * 24));
+
+  let sorteosTranscurridos = 1;
+  if (sorteo.tipo === "MIERCOLITO" || sorteo.tipo === "DOMINICAL") {
+    sorteosTranscurridos = Math.max(1, Math.round(diffDias / 7));
+  } else if (sorteo.tipo === "GORDITO") {
+    sorteosTranscurridos = Math.max(1, Math.round(diffDias / 30));
+  } else if (sorteo.tipo === "EXTRAORDINARIA") {
+    sorteosTranscurridos = Math.max(1, Math.round(diffDias / 365));
+  }
+  return String(n + sorteosTranscurridos);
 }
 
 /**
@@ -1271,6 +1364,7 @@ const Ic = ({ n, s = 20, c = "currentColor", sw = 2 }) => {
     refresh:<><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></>,
     grid:<><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></>,
     sparkle:<><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/></>,
+    share:<><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></>,
   };
   return <svg width={s} height={s} fill="none" stroke={c} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">{d[n]}</svg>;
 };
@@ -1459,6 +1553,47 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[], activeVendors=V
   });
   const selSorteo = sorted.find(s=>s.tipo===sorteoTab) || sorted[0];
 
+  // Compartir resultados del sorteo vía Web Share API (móvil) o WhatsApp (fallback)
+  const compartirSorteo = async (s) => {
+    if (!s) return;
+    const premiosTxt = s.premios.map(p => {
+      const num = (p.num === "0000" || p.num === "00000") ? "——" : p.num;
+      const extra = (p.letras && p.letras !== "----") ? ` ${p.letras}` : "";
+      const serie = (p.serie && p.serie !== "00") ? ` (S${p.serie} F${p.folio})` : "";
+      return `${p.pos}: *${num}*${extra}${serie}`;
+    }).join("\n");
+
+    const texto =
+`🎉 *${s.icon} ${s.tipo}*
+📅 ${s.fecha} · Sorteo Nº ${s.sorteoN}
+💰 Premio Mayor: *${s.premioMayor}*
+
+${premiosTxt}
+
+🎟️ _Vía CHANCE — El Billetero de Todos_
+https://chanceloteria.pages.dev`;
+
+    // 1) Web Share API nativa (móvil moderno)
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `${s.tipo} · Sorteo Nº ${s.sorteoN}`,
+          text: texto,
+        });
+        return;
+      } catch (e) {
+        if (e.name === "AbortError") return; // el usuario canceló
+      }
+    }
+
+    // 2) Fallback: copiar al portapapeles + abrir WhatsApp Web/App
+    try {
+      await navigator.clipboard.writeText(texto);
+    } catch (_) { /* ignorar si no se puede copiar */ }
+    const waUrl = `https://wa.me/?text=${encodeURIComponent(texto)}`;
+    window.open(waUrl, "_blank", "noopener,noreferrer");
+  };
+
   return (
     <div className="sc fu">
       {/* Header */}
@@ -1524,7 +1659,24 @@ function ClienteHome({ cart, nav, sharedVendor, activeOrders=[], activeVendors=V
       {/* Sorteo card con datos reales */}
       <div className="sort-card" style={{background:selSorteo.bg,borderColor:selSorteo.border,marginBottom:12,position:"relative"}}>
         <div style={{position:"absolute",right:-20,top:-20,width:90,height:90,borderRadius:"50%",background:selSorteo.bg}}/>
-        <div className="row" style={{justifyContent:"space-between",marginBottom:8}}>
+        {/* Botón Compartir resultado del sorteo */}
+        <button
+          onClick={(e)=>{ e.stopPropagation(); compartirSorteo(selSorteo); }}
+          title="Compartir resultados"
+          aria-label="Compartir resultados del sorteo"
+          style={{
+            position:"absolute", top:10, right:10, zIndex:2,
+            width:34, height:34, borderRadius:"50%",
+            background:"rgba(8,17,31,.65)",
+            border:`1px solid ${selSorteo.border}`,
+            display:"flex", alignItems:"center", justifyContent:"center",
+            cursor:"pointer", backdropFilter:"blur(6px)",
+            WebkitBackdropFilter:"blur(6px)", padding:0,
+          }}
+        >
+          <Ic n="share" s={14} c={selSorteo.color}/>
+        </button>
+        <div className="row" style={{justifyContent:"space-between",marginBottom:8,paddingRight:42}}>
           <div>
             <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:selSorteo.color,letterSpacing:3,lineHeight:1}}>{selSorteo.icon} {selSorteo.tipo}</div>
             <div style={{fontSize:10,color:"var(--muted)",marginTop:2}}>{selSorteo.fecha} · Sorteo Nº {selSorteo.sorteoN}</div>
@@ -2053,15 +2205,17 @@ function TableroScreen({ vendor, cart, setCart, nav, vendorActiveSorteo=null }) 
           || sorteoDetectadoDeInventario
           || vendorActiveSorteo?.tipo
           || "MIERCOLITO";
-        // Fecha: si tenemos el tipo detectado pero no fecha, usamos la del próximo sorteo
+        // Fecha y número: SIEMPRE recalculados dinámicamente con getSorteoActivo
+        // para garantizar que apunten al PRÓXIMO sorteo (no al último jugado),
+        // aunque los datos seed o de Firebase estén desactualizados.
         const sorteoActivoFromHelper = getSorteoActivo(sorteoTipo);
-        const sorteoFecha = vendor.sorteoData?.fecha
+        const sorteoFecha = sorteoActivoFromHelper?.fecha
+          || vendor.sorteoData?.fecha
           || vendorOwnSorteo?.fecha
-          || sorteoActivoFromHelper?.fecha
           || "";
-        const sorteoN = vendor.sorteoData?.sorteoN
+        const sorteoN = sorteoActivoFromHelper?.sorteoN
+          || vendor.sorteoData?.sorteoN
           || vendorOwnSorteo?.sorteoN
-          || sorteoActivoFromHelper?.sorteoN
           || "";
         // Iconos y colores por tipo
         const ICONOS = { MIERCOLITO:"⚡", DOMINICAL:"🌟", GORDITO:"🍀", EXTRAORDINARIA:"💎" };
@@ -2863,8 +3017,10 @@ function TrackingScreen({ order }) {
   const repartidorActivo   = repartidorAsignado || order?.status === "EN_CAMINO" || order?.status === "ENTREGADO";
 
   // Construir markers según el estado del pedido
-  // Mientras NO está EN_CAMINO: mostrar Vendedor (aproximado) + Comprador
-  // Cuando EN_CAMINO: mostrar Repartidor en vivo + Comprador (vendedor ya no aparece)
+  // PENDIENTE / APROBADO (incluye "repartidor en camino al vendedor"):
+  //   → mostrar Vendedor (zona aproximada) + Comprador
+  // EN_CAMINO: mostrar Repartidor en vivo + Comprador (vendedor ya no aparece)
+  // ENTREGADO: solo Comprador
   const markers = [];
   const circles = [];
 
@@ -2874,14 +3030,16 @@ function TrackingScreen({ order }) {
     label: 'Tu ubicación', popup: `<b>📍 Entregar aquí</b><br/>${order?.deliveryAddress?.text || 'Tu dirección'}`
   });
 
-  // Vendedor: solo se muestra mientras NO hay repartidor en camino
+  // Vendedor: se muestra desde PENDIENTE hasta APROBADO (incluye sub-estado
+  // "Repartidor en camino al vendedor" cuando pickupStarted=true).
   // Aparece como CÍRCULO grande de zona aproximada (~900m radio) por privacidad estilo Airbnb.
   // ▸ Aplicamos un offset determinista al centro del círculo (basado en orderId)
   //   para que el vendedor NUNCA esté en el centro exacto del círculo. Su ubicación real
   //   queda en algún punto interno del círculo, indeterminado para el comprador.
   // ▸ NO mostramos marker exacto del vendedor (solo el círculo + un marker invisible
   //   para el popup informativo, ubicado en el centro del círculo desplazado).
-  if (!repartidorActivo && order && (order.status === "PENDIENTE" || order.status === "APROBADO")) {
+  // ▸ Cuando status pasa a EN_CAMINO, esta zona se oculta y aparece el pin real del repartidor.
+  if (order && (order.status === "PENDIENTE" || order.status === "APROBADO")) {
     if (vendorCoords) {
       // Tenemos GPS real del vendedor — mostrar círculo aproximado (estilo Airbnb)
       const seed = (order.id || "CH-2400").split("").reduce((s,c)=>s+c.charCodeAt(0),0);
@@ -2973,9 +3131,9 @@ function TrackingScreen({ order }) {
       <div style={{position:"relative", marginBottom:10}}>
         <MapaLeaflet
           center={
-            !repartidorActivo && vendorCoords
-              ? [vendorCoords.lat, vendorCoords.lng]    // GPS real del vendedor
-              : [ubicComprador.lat, ubicComprador.lng]  // dirección del comprador (o centro Panamá)
+            (order?.status === "PENDIENTE" || order?.status === "APROBADO") && vendorCoords
+              ? [vendorCoords.lat, vendorCoords.lng]    // GPS real del vendedor (PENDIENTE/APROBADO)
+              : [ubicComprador.lat, ubicComprador.lng]  // dirección del comprador (EN_CAMINO/ENTREGADO)
           }
           zoom={14}
           markers={markers}
@@ -2984,7 +3142,7 @@ function TrackingScreen({ order }) {
           height={250}
         />
         {/* Banner si no hay GPS del vendedor disponible */}
-        {!repartidorActivo && !vendorCoords && (order.status === "PENDIENTE" || order.status === "APROBADO") && (
+        {!vendorCoords && (order.status === "PENDIENTE" || order.status === "APROBADO") && (
           <div style={{position:"absolute",top:10,right:10,left:10,background:"rgba(244,196,48,.92)",borderRadius:9,padding:"6px 11px",zIndex:600}}>
             <div style={{fontSize:10,color:"#08101E",fontWeight:800}}>
               📍 Ubicación del vendedor no disponible aún
