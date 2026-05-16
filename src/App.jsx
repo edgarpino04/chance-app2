@@ -6137,49 +6137,114 @@ function ResultadosScreen({ initTab="resultados" }) {
   };
 
   // ── Helper: buscar premio de un número en un sorteo específico ────────────
+  // Tabla oficial de premios LNB Panamá (Miercolito / Dominical / Gordito):
+  //   BILLETE (4 cifras), por fracción de $1.00:
+  //   ┌──────────────────────────────────────────────────────────┬──────────┐
+  //   │ 1er premio (4 cifras + serie y folio)                    │ $12,000  │ ← $2,000 base + $10,000 incentivo
+  //   │ 1er premio (4 cifras solo)                               │  $2,000  │
+  //   │ 2do premio (4 cifras)                                    │    $600  │
+  //   │ 3er premio (4 cifras)                                    │    $300  │
+  //   │ Aproximación 1er premio (anterior o posterior)           │     $25  │
+  //   │ 3 últimas o 3 primeras cifras del 1er premio             │     $50  │
+  //   │ 2 últimas o 2 primeras cifras del 1er premio             │      $3  │
+  //   │ Última cifra del 1er premio                              │      $1  │
+  //   │ 4 cifras del 2do o 3er premio (sin serie/folio del 2/3)  │ ver arriba │
+  //   └──────────────────────────────────────────────────────────┴──────────┘
+  //
+  //   CHANCE (2 cifras), por $1 apostado (= 4 fracciones de $0.25):
+  //   ┌──────────────────────────────────────────────────────────┬──────────┐
+  //   │ 2 últimas cifras del 1er premio                          │     $14  │
+  //   │ 2 últimas cifras del 2do premio                          │      $3  │
+  //   │ 2 últimas cifras del 3er premio                          │      $2  │
+  //   └──────────────────────────────────────────────────────────┴──────────┘
+  //
+  // Nota: los incentivos por letras del 1er premio (4 letras impresas que
+  // varían por sorteo) NO se calculan aquí porque no están en el código de
+  // barras estándar. El comprador debe verificarlas manualmente con LNB.
   const buscarPremioEnSorteo = (sorteo, numero, decoded) => {
     const esChance = decoded?.tipo === "CHANCE" || (!decoded && numero.length === 2);
     let mejorMatch = null;
 
+    // Helper: conservar solo el match con mayor monto
+    const considerar = (monto, tipoPremio, i, p) => {
+      if (!mejorMatch || monto > mejorMatch.monto) {
+        mejorMatch = { sorteo, posicion: i, premio: p, tipoPremio, monto, esChance };
+      }
+    };
+
     for (let i = 0; i < sorteo.premios.length; i++) {
       const p = sorteo.premios[i];
-      const premioNum = p.num;
-      let match = false, tipoPremio = "", montoPremio = 0;
+      const premioNum = String(p.num || "");
+      // Saltar premios placeholder (sorteo aún sin verificar)
+      if (!premioNum || premioNum === "0000" || premioNum === "00000" || /^0+$/.test(premioNum)) continue;
 
+      // ════════════════════════════════════════════════════════════════
+      // CHANCE — solo compara las 2 últimas cifras de cada premio
+      // ════════════════════════════════════════════════════════════════
       if (esChance) {
-        const ult2 = premioNum.slice(-2).padStart(2, "0");
-        const numN = numero.slice(-2).padStart(2, "0");
-        if (ult2 === numN) {
-          match = true;
-          tipoPremio = `${p.pos} (Chance)`;
-          if (i === 0) montoPremio = 14;
-          else if (i === 1) montoPremio = 3;
-          else montoPremio = 2;
+        const ult2P = premioNum.slice(-2).padStart(2, "0");
+        const ult2N = numero.slice(-2).padStart(2, "0");
+        if (ult2P === ult2N) {
+          if      (i === 0) considerar(14, `Chance — 2 últimas del 1er premio`, i, p);
+          else if (i === 1) considerar(3,  `Chance — 2 últimas del 2do premio`, i, p);
+          else              considerar(2,  `Chance — 2 últimas del 3er premio`, i, p);
         }
-      } else {
-        if (premioNum === numero) {
-          match = true;
-          if (decoded?.serie === p.serie && decoded?.folio === p.folio) {
-            tipoPremio = `${p.pos} con Serie y Folio`;
-            montoPremio = i === 0 ? 2000 : i === 1 ? 600 : 300;
-          } else {
-            tipoPremio = `${p.pos} (4 cifras)`;
-            montoPremio = i === 0 ? 200 : i === 1 ? 50 : 30;
-          }
-        } else if (premioNum.slice(-3) === numero.slice(-3)) {
-          match = true;
-          tipoPremio = "Aproximación 3 cifras";
-          montoPremio = 5;
-        } else if (premioNum.slice(-2) === numero.slice(-2) && i === 0) {
-          match = true;
-          tipoPremio = "Últimas 2 cifras del 1er premio";
-          montoPremio = 2;
-        }
+        continue;
       }
 
-      if (match) {
-        if (!mejorMatch || montoPremio > mejorMatch.monto) {
-          mejorMatch = { sorteo, posicion: i, premio: p, tipoPremio, monto: montoPremio };
+      // ════════════════════════════════════════════════════════════════
+      // BILLETE — coincidencia exacta de las 4 cifras
+      // ════════════════════════════════════════════════════════════════
+      if (premioNum === numero) {
+        if (i === 0) {
+          // 1er premio: verificar también serie + folio para el premio mayor
+          const tieneSerieFolio = decoded?.serie && decoded?.folio
+            && String(decoded.serie).trim() === String(p.serie || "").trim()
+            && String(decoded.folio).trim() === String(p.folio || "").trim();
+          if (tieneSerieFolio) {
+            considerar(12000, "Premio Mayor (4 cifras + serie y folio)", i, p);
+          } else {
+            considerar(2000, "1er Premio (4 cifras)", i, p);
+          }
+        } else if (i === 1) {
+          considerar(600, "2do Premio (4 cifras)", i, p);
+        } else {
+          considerar(300, "3er Premio (4 cifras)", i, p);
+        }
+        continue; // un match exacto excluye buscar aproximaciones del mismo premio
+      }
+
+      // ════════════════════════════════════════════════════════════════
+      // BILLETE — Aproximaciones (SOLO se aplican al 1er premio)
+      // ════════════════════════════════════════════════════════════════
+      if (i === 0) {
+        const premioInt = parseInt(premioNum, 10);
+        const numeroInt = parseInt(numero, 10);
+
+        // Aproximación numérica: número anterior o posterior al 1er premio
+        // Ej: si premio mayor es 4764, los billetes 4763 y 4765 ganan
+        if (!isNaN(premioInt) && !isNaN(numeroInt) && Math.abs(premioInt - numeroInt) === 1) {
+          considerar(25, "Aproximación al 1er premio (anterior/posterior)", i, p);
+        }
+        // 3 últimas cifras del 1er premio
+        if (premioNum.length >= 3 && premioNum.slice(-3) === numero.slice(-3)) {
+          considerar(50, "3 últimas cifras del 1er premio", i, p);
+        }
+        // 3 primeras cifras del 1er premio
+        if (premioNum.length >= 3 && premioNum.slice(0, 3) === numero.slice(0, 3)) {
+          considerar(50, "3 primeras cifras del 1er premio", i, p);
+        }
+        // 2 últimas cifras del 1er premio
+        if (premioNum.length >= 2 && premioNum.slice(-2) === numero.slice(-2)) {
+          considerar(3, "2 últimas cifras del 1er premio", i, p);
+        }
+        // 2 primeras cifras del 1er premio
+        if (premioNum.length >= 2 && premioNum.slice(0, 2) === numero.slice(0, 2)) {
+          considerar(3, "2 primeras cifras del 1er premio", i, p);
+        }
+        // Última cifra del 1er premio
+        if (premioNum.slice(-1) === numero.slice(-1)) {
+          considerar(1, "Última cifra del 1er premio", i, p);
         }
       }
     }
@@ -6581,7 +6646,9 @@ function ResultadosScreen({ initTab="resultados" }) {
                 <div style={{background:"rgba(8,17,31,.5)",borderRadius:12,padding:"12px 22px",display:"inline-block",marginBottom:10}}>
                   <div style={{fontSize:9,color:"var(--muted)",fontWeight:700,marginBottom:2}}>GANASTE</div>
                   <div style={{fontFamily:"'Bebas Neue'",fontSize:42,color:"var(--gold)",letterSpacing:2,lineHeight:1}}>${verifResult.premio.monto.toLocaleString()}</div>
-                  <div style={{fontSize:9,color:"var(--muted)",marginTop:2}}>por dólar apostado</div>
+                  <div style={{fontSize:9,color:"var(--muted)",marginTop:2}}>
+                    {verifResult.premio.esChance ? "por $1 apostado (4 fracciones)" : "por fracción"}
+                  </div>
                 </div>
                 <div style={{fontSize:11,color:"var(--text)",fontWeight:600,marginBottom:3}}>
                   {verifResult.premio.sorteo.icon} {verifResult.premio.sorteo.tipo} Nº{verifResult.premio.sorteo.sorteoN}
