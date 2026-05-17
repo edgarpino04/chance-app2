@@ -7667,6 +7667,7 @@ function VendedorHome({ authUser=null, billetes=[], setBilletes, chances=[], set
   const [mainTab, setMainTab] = useState(initTab);
   const [prodTab, setProdTab] = useState("billetes");
   const [showAdd, setShowAdd] = useState(false);
+  const [showScanIA, setShowScanIA] = useState(false);  // Modal de escaneo con IA
   const [addType, setAddType] = useState("billete");
   const [newNum, setNewNum] = useState("");
   const [newStock, setNewStock] = useState(1);
@@ -8040,9 +8041,14 @@ function VendedorHome({ authUser=null, billetes=[], setBilletes, chances=[], set
             </div>
           </div>
         </div>
-        <button onClick={()=>setShowAdd(true)} style={{padding:"9px 14px",background:"linear-gradient(135deg,var(--gold),var(--gold2))",borderRadius:11,display:"flex",alignItems:"center",gap:6,cursor:"pointer",border:"none",color:"#08111F",fontFamily:"'DM Sans'",fontWeight:800,fontSize:12,boxShadow:"0 3px 14px rgba(244,196,48,.25)"}}>
-          <Ic n="plus" s={13} c="#08111F"/> AÑADIR
-        </button>
+        <div style={{display:"flex",gap:7}}>
+          <button onClick={()=>setShowScanIA(true)} style={{padding:"9px 12px",background:"linear-gradient(135deg,#A78BFA,#8B5CF6)",borderRadius:11,display:"flex",alignItems:"center",gap:6,cursor:"pointer",border:"none",color:"#FFFFFF",fontFamily:"'DM Sans'",fontWeight:800,fontSize:12,boxShadow:"0 3px 14px rgba(167,139,250,.25)"}}>
+            📸 ESCANEAR
+          </button>
+          <button onClick={()=>setShowAdd(true)} style={{padding:"9px 14px",background:"linear-gradient(135deg,var(--gold),var(--gold2))",borderRadius:11,display:"flex",alignItems:"center",gap:6,cursor:"pointer",border:"none",color:"#08111F",fontFamily:"'DM Sans'",fontWeight:800,fontSize:12,boxShadow:"0 3px 14px rgba(244,196,48,.25)"}}>
+            <Ic n="plus" s={13} c="#08111F"/> AÑADIR
+          </button>
+        </div>
       </div>
 
       {/* ── SELECTOR DE SORTEO ACTIVO + PLANTILLAS — solo en pantalla Tablero ── */}
@@ -8804,6 +8810,400 @@ function VendedorHome({ authUser=null, billetes=[], setBilletes, chances=[], set
           </div>
         </div>
       )}
+
+      {/* ═══ MODAL ESCANEAR CON IA ═══ */}
+      {showScanIA && (
+        <EscanearTableroIAModal
+          activeSorteo={activeSorteo}
+          billetesActuales={billetesDelSorteo}
+          chancesActuales={chancesDelSorteo}
+          onClose={()=>setShowScanIA(false)}
+          onGuardar={(nuevosBilletes, nuevosChances) => {
+            const meta = {
+              sorteoTipo:    activeSorteo?.tipo || "MIERCOLITO",
+              sorteoN:       activeSorteo?.sorteoN || "",
+              vendorOwnerId: vendorUserId,
+              vendorCode:    vendorCode,
+            };
+            // Añadir billetes nuevos (sin duplicar) o sumar stock a existentes
+            if (nuevosBilletes.length > 0 && setBilletes) {
+              setBilletes(prev => {
+                const next = [...prev];
+                for (const { n, stock } of nuevosBilletes) {
+                  const idx = next.findIndex(b =>
+                    b.n === n &&
+                    b.sorteoTipo === meta.sorteoTipo &&
+                    (b.vendorOwnerId || "vendedor_carlos") === vendorUserId
+                  );
+                  if (idx >= 0) {
+                    next[idx] = { ...next[idx], stock: (next[idx].stock || 0) + stock };
+                  } else {
+                    next.push({ n, stock, sold: 0, ...meta });
+                  }
+                }
+                return next;
+              });
+            }
+            if (nuevosChances.length > 0 && setChances) {
+              setChances(prev => {
+                const next = [...prev];
+                for (const { n, stock } of nuevosChances) {
+                  const idx = next.findIndex(c =>
+                    c.n === n &&
+                    c.sorteoTipo === meta.sorteoTipo &&
+                    (c.vendorOwnerId || "vendedor_carlos") === vendorUserId
+                  );
+                  if (idx >= 0) {
+                    next[idx] = { ...next[idx], stock: (next[idx].stock || 0) + stock };
+                  } else {
+                    next.push({ n, stock, sold: 0, ...meta });
+                  }
+                }
+                return next;
+              });
+            }
+            const total = nuevosBilletes.length + nuevosChances.length;
+            toast(`✅ Inventario actualizado: ${total} ítem${total!==1?'s':''}`);
+            setShowScanIA(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MODAL: ESCANEAR TABLERO CON IA (Gemini Vision)
+   ═══════════════════════════════════════════════════════════════════════════
+   Flujo:
+   1. Vendedor toma foto del tablero (cámara trasera, capture="environment")
+   2. La imagen se comprime localmente a JPG ~1280px (calidad 0.85)
+   3. POST a /api/detectar-tablero con base64
+   4. Se muestra lista editable de números detectados con sus cantidades
+   5. Vendedor revisa, ajusta cantidades, marca/desmarca, y guarda
+═══════════════════════════════════════════════════════════════════════════ */
+function EscanearTableroIAModal({ activeSorteo, billetesActuales = [], chancesActuales = [], onClose, onGuardar }) {
+  const [paso, setPaso] = useState("captura");     // "captura" | "analizando" | "revisar" | "error"
+  const [imagen, setImagen] = useState(null);      // base64 de la imagen comprimida
+  const [resultados, setResultados] = useState({ billetes: [], chances: [] });
+  const [error, setError] = useState(null);
+  const [procesando, setProcesando] = useState(false);
+  const fileRef = useRef(null);
+
+  // ── Compresión de imagen (cliente) ──────────────────────────────────────
+  // Reducimos a max 1280px lado mayor, JPG calidad 0.85 → típicamente 200-400 KB
+  const comprimirImagen = (file) => new Promise((resolve, reject) => {
+    if (!file) return reject(new Error("Sin archivo"));
+    if (!file.type.startsWith("image/")) return reject(new Error("No es una imagen"));
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 1280;
+        let w = img.width, h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
+          else       { w = Math.round(w * maxDim / h); h = maxDim; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#FFFFFF"; ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const compressed = canvas.toDataURL("image/jpeg", 0.85);
+        resolve(compressed);
+      };
+      img.onerror = () => reject(new Error("Imagen inválida"));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error("Error al leer archivo"));
+    reader.readAsDataURL(file);
+  });
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setProcesando(true);
+    try {
+      const compressed = await comprimirImagen(file);
+      setImagen(compressed);
+      // Llamar a la IA automáticamente
+      await analizarConIA(compressed);
+    } catch (err) {
+      setError(err.message);
+      setPaso("error");
+    }
+    setProcesando(false);
+  };
+
+  const analizarConIA = async (imgBase64) => {
+    setPaso("analizando");
+    setError(null);
+    try {
+      const resp = await fetch("/api/detectar-tablero", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: imgBase64,
+          tipo: "ambos",
+          sorteo: activeSorteo?.tipo || "MIERCOLITO",
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        throw new Error(data.error || `Error HTTP ${resp.status}`);
+      }
+      // Agrupar números repetidos en cantidades
+      const agruparEnCantidades = (lista) => {
+        const conteo = {};
+        for (const n of lista) conteo[n] = (conteo[n] || 0) + 1;
+        return Object.entries(conteo)
+          .map(([n, stock]) => ({ n, stock, checked: true }))
+          .sort((a, b) => a.n.localeCompare(b.n));
+      };
+      setResultados({
+        billetes: agruparEnCantidades(data.billetes || []),
+        chances:  agruparEnCantidades(data.chances  || []),
+      });
+      setPaso("revisar");
+    } catch (err) {
+      setError(err.message);
+      setPaso("error");
+    }
+  };
+
+  const toggleCheck = (tipo, n) => {
+    setResultados(r => ({
+      ...r,
+      [tipo]: r[tipo].map(item => item.n === n ? { ...item, checked: !item.checked } : item),
+    }));
+  };
+
+  const cambiarStock = (tipo, n, delta) => {
+    setResultados(r => ({
+      ...r,
+      [tipo]: r[tipo].map(item => item.n === n
+        ? { ...item, stock: Math.max(1, item.stock + delta) }
+        : item
+      ),
+    }));
+  };
+
+  const setStockManual = (tipo, n, valor) => {
+    const v = Math.max(1, parseInt(valor, 10) || 1);
+    setResultados(r => ({
+      ...r,
+      [tipo]: r[tipo].map(item => item.n === n ? { ...item, stock: v } : item),
+    }));
+  };
+
+  const eliminarItem = (tipo, n) => {
+    setResultados(r => ({
+      ...r,
+      [tipo]: r[tipo].filter(item => item.n !== n),
+    }));
+  };
+
+  const guardar = () => {
+    const billetesAGuardar = resultados.billetes.filter(b => b.checked).map(b => ({ n: b.n, stock: b.stock }));
+    const chancesAGuardar  = resultados.chances.filter(c => c.checked).map(c => ({ n: c.n, stock: c.stock }));
+    if (billetesAGuardar.length === 0 && chancesAGuardar.length === 0) {
+      toast("⚠️ No hay ítems seleccionados");
+      return;
+    }
+    onGuardar(billetesAGuardar, chancesAGuardar);
+  };
+
+  // Marcar/desmarcar todos
+  const marcarTodos = (tipo, checked) => {
+    setResultados(r => ({
+      ...r,
+      [tipo]: r[tipo].map(item => ({ ...item, checked })),
+    }));
+  };
+
+  const totalSeleccionados =
+    resultados.billetes.filter(b => b.checked).length +
+    resultados.chances.filter(c => c.checked).length;
+
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal pop" onClick={e => e.stopPropagation()} style={{maxHeight:"92vh",overflowY:"auto"}}>
+        <div className="row" style={{justifyContent:"space-between",marginBottom:10}}>
+          <div>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:"#A78BFA",letterSpacing:2}}>📸 ESCANEAR TABLERO</div>
+            <div style={{fontSize:10,color:"var(--muted)",marginTop:2}}>IA + Gemini Vision</div>
+          </div>
+          <button onClick={onClose} style={{background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:9,width:32,height:32,cursor:"pointer"}}>
+            <Ic n="close" s={14} c="var(--muted)"/>
+          </button>
+        </div>
+
+        {/* Sorteo activo reminder */}
+        {activeSorteo && (
+          <div style={{background:activeSorteo.bg,border:`1px solid ${activeSorteo.border}`,borderRadius:10,padding:"7px 11px",marginBottom:14,display:"flex",gap:7,alignItems:"center"}}>
+            <span style={{fontSize:16}}>{activeSorteo.icon}</span>
+            <div style={{flex:1}}>
+              <div style={{fontSize:10,fontWeight:800,color:activeSorteo.color}}>Escaneando para {activeSorteo.tipo}</div>
+              <div style={{fontSize:9,color:"var(--muted)"}}>Sorteo Nº {activeSorteo.sorteoN}</div>
+            </div>
+          </div>
+        )}
+
+        {/* ── PASO 1: CAPTURA ── */}
+        {paso === "captura" && (
+          <>
+            <div style={{background:"rgba(167,139,250,.06)",border:"1px solid rgba(167,139,250,.25)",borderRadius:10,padding:"11px 13px",marginBottom:12,fontSize:11,color:"var(--muted)",lineHeight:1.5}}>
+              💡 <strong style={{color:"#A78BFA"}}>Cómo funciona:</strong> Toma una foto clara del tablero. La IA detectará los números de billetes (4 cifras) y chances (2 cifras), luego podrás revisar y ajustar las cantidades antes de guardar.
+            </div>
+            <button onClick={() => fileRef.current?.click()} disabled={procesando}
+              style={{
+                width:"100%", padding:"32px 14px", marginBottom:10,
+                background:"var(--bg3)", border:"2px dashed rgba(167,139,250,.4)",
+                borderRadius:14, color:"var(--text)", cursor: procesando ? "default" : "pointer",
+                fontFamily:"'DM Sans',sans-serif", display:"flex", flexDirection:"column",
+                alignItems:"center", gap:11
+              }}>
+              <div style={{fontSize:48}}>{procesando ? "⏳" : "📸"}</div>
+              <div style={{fontSize:14,fontWeight:800,color:"#A78BFA"}}>{procesando ? "Procesando..." : "Tomar foto del tablero"}</div>
+              <div style={{fontSize:10,color:"var(--muted)",textAlign:"center",lineHeight:1.5}}>
+                Luz uniforme · Sin sombras · Tablero completo<br/>
+                JPG/PNG · Se comprime automáticamente
+              </div>
+            </button>
+            <input ref={fileRef} type="file" accept="image/*" capture="environment"
+              style={{display:"none"}} onChange={handleFile}/>
+            <div style={{fontSize:10,color:"var(--muted)",textAlign:"center",marginTop:5,lineHeight:1.5}}>
+              ⏱️ El análisis toma ~3-5 segundos · Costo: ~$0.001 por escaneo
+            </div>
+          </>
+        )}
+
+        {/* ── PASO 2: ANALIZANDO ── */}
+        {paso === "analizando" && (
+          <div style={{padding:"40px 14px",textAlign:"center"}}>
+            <div style={{fontSize:54,marginBottom:14,animation:"spin 2s linear infinite",display:"inline-block"}}>🤖</div>
+            <div style={{fontSize:16,fontWeight:800,color:"#A78BFA",marginBottom:6}}>Analizando tablero con IA...</div>
+            <div style={{fontSize:11,color:"var(--muted)",lineHeight:1.6}}>
+              Gemini está detectando los números<br/>
+              Esto suele tomar 3-5 segundos
+            </div>
+            {imagen && (
+              <img src={imagen} alt="" style={{maxWidth:"100%",maxHeight:140,borderRadius:9,marginTop:14,opacity:.4,objectFit:"contain"}}/>
+            )}
+          </div>
+        )}
+
+        {/* ── PASO 3: REVISAR ── */}
+        {paso === "revisar" && (
+          <>
+            <div style={{background:"rgba(0,214,143,.06)",border:"1px solid rgba(0,214,143,.25)",borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11,color:"var(--text)",lineHeight:1.5}}>
+              ✅ <strong style={{color:"var(--green)"}}>IA detectó {resultados.billetes.length + resultados.chances.length} números únicos.</strong> Revisa la lista, ajusta cantidades y desmarca lo que no quieras añadir.
+            </div>
+
+            {/* BILLETES */}
+            {resultados.billetes.length > 0 && (
+              <div style={{marginBottom:14}}>
+                <div className="row" style={{justifyContent:"space-between",marginBottom:6}}>
+                  <div className="sec" style={{margin:0,color:"var(--gold)"}}>🎟️ BILLETES (4 cifras) · {resultados.billetes.filter(b=>b.checked).length}/{resultados.billetes.length}</div>
+                  <div style={{display:"flex",gap:5}}>
+                    <button onClick={()=>marcarTodos("billetes",true)} style={{background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--muted)",padding:"3px 8px",borderRadius:6,fontSize:9,fontWeight:700,cursor:"pointer"}}>Todos</button>
+                    <button onClick={()=>marcarTodos("billetes",false)} style={{background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--muted)",padding:"3px 8px",borderRadius:6,fontSize:9,fontWeight:700,cursor:"pointer"}}>Ninguno</button>
+                  </div>
+                </div>
+                <div style={{maxHeight:200,overflowY:"auto",border:"1px solid var(--border)",borderRadius:10}}>
+                  {resultados.billetes.map(item => (
+                    <div key={item.n} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderBottom:"1px solid var(--border)",opacity:item.checked?1:.4}}>
+                      <input type="checkbox" checked={item.checked} onChange={()=>toggleCheck("billetes",item.n)}
+                        style={{width:16,height:16,cursor:"pointer",accentColor:"var(--gold)"}}/>
+                      <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--gold)",letterSpacing:2,minWidth:56}}>{item.n}</div>
+                      <div style={{flex:1}}/>
+                      <button onClick={()=>cambiarStock("billetes",item.n,-1)} disabled={item.stock<=1}
+                        style={{width:26,height:26,borderRadius:6,background:"var(--bg3)",border:"1px solid var(--border)",color:item.stock<=1?"var(--muted)":"var(--text)",cursor:item.stock<=1?"default":"pointer",fontSize:14,fontWeight:800}}>−</button>
+                      <input type="number" min="1" value={item.stock}
+                        onChange={e=>setStockManual("billetes",item.n,e.target.value)}
+                        style={{width:46,textAlign:"center",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:6,padding:"4px 0",color:"var(--text)",fontSize:13,fontWeight:700,fontFamily:"'DM Sans'"}}/>
+                      <button onClick={()=>cambiarStock("billetes",item.n,1)}
+                        style={{width:26,height:26,borderRadius:6,background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--text)",cursor:"pointer",fontSize:14,fontWeight:800}}>+</button>
+                      <button onClick={()=>eliminarItem("billetes",item.n)}
+                        style={{width:26,height:26,borderRadius:6,background:"rgba(255,75,110,.1)",border:"1px solid rgba(255,75,110,.3)",color:"var(--red)",cursor:"pointer",fontSize:11,fontWeight:800}}>×</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* CHANCES */}
+            {resultados.chances.length > 0 && (
+              <div style={{marginBottom:14}}>
+                <div className="row" style={{justifyContent:"space-between",marginBottom:6}}>
+                  <div className="sec" style={{margin:0,color:"var(--blue)"}}>⚡ CHANCES (2 cifras) · {resultados.chances.filter(c=>c.checked).length}/{resultados.chances.length}</div>
+                  <div style={{display:"flex",gap:5}}>
+                    <button onClick={()=>marcarTodos("chances",true)} style={{background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--muted)",padding:"3px 8px",borderRadius:6,fontSize:9,fontWeight:700,cursor:"pointer"}}>Todos</button>
+                    <button onClick={()=>marcarTodos("chances",false)} style={{background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--muted)",padding:"3px 8px",borderRadius:6,fontSize:9,fontWeight:700,cursor:"pointer"}}>Ninguno</button>
+                  </div>
+                </div>
+                <div style={{maxHeight:200,overflowY:"auto",border:"1px solid var(--border)",borderRadius:10}}>
+                  {resultados.chances.map(item => (
+                    <div key={item.n} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderBottom:"1px solid var(--border)",opacity:item.checked?1:.4}}>
+                      <input type="checkbox" checked={item.checked} onChange={()=>toggleCheck("chances",item.n)}
+                        style={{width:16,height:16,cursor:"pointer",accentColor:"var(--blue)"}}/>
+                      <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--blue)",letterSpacing:2,minWidth:36}}>{item.n}</div>
+                      <div style={{flex:1}}/>
+                      <button onClick={()=>cambiarStock("chances",item.n,-1)} disabled={item.stock<=1}
+                        style={{width:26,height:26,borderRadius:6,background:"var(--bg3)",border:"1px solid var(--border)",color:item.stock<=1?"var(--muted)":"var(--text)",cursor:item.stock<=1?"default":"pointer",fontSize:14,fontWeight:800}}>−</button>
+                      <input type="number" min="1" value={item.stock}
+                        onChange={e=>setStockManual("chances",item.n,e.target.value)}
+                        style={{width:46,textAlign:"center",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:6,padding:"4px 0",color:"var(--text)",fontSize:13,fontWeight:700,fontFamily:"'DM Sans'"}}/>
+                      <button onClick={()=>cambiarStock("chances",item.n,1)}
+                        style={{width:26,height:26,borderRadius:6,background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--text)",cursor:"pointer",fontSize:14,fontWeight:800}}>+</button>
+                      <button onClick={()=>eliminarItem("chances",item.n)}
+                        style={{width:26,height:26,borderRadius:6,background:"rgba(255,75,110,.1)",border:"1px solid rgba(255,75,110,.3)",color:"var(--red)",cursor:"pointer",fontSize:11,fontWeight:800}}>×</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {resultados.billetes.length === 0 && resultados.chances.length === 0 && (
+              <div style={{textAlign:"center",padding:"30px 14px",color:"var(--muted)"}}>
+                <div style={{fontSize:42,marginBottom:8}}>🤔</div>
+                <div style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>No se detectaron números</div>
+                <div style={{fontSize:10,marginTop:4}}>Intenta con otra foto con mejor luz o ángulo</div>
+              </div>
+            )}
+
+            <div style={{display:"flex",gap:7,marginTop:10}}>
+              <button onClick={()=>{setPaso("captura");setImagen(null);setResultados({billetes:[],chances:[]});}}
+                style={{flex:1,padding:"11px",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:10,color:"var(--text)",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                📸 Nueva foto
+              </button>
+              <button onClick={guardar} disabled={totalSeleccionados === 0}
+                style={{flex:2,padding:"11px",background: totalSeleccionados === 0 ? "var(--bg3)" : "linear-gradient(135deg,#00D68F,#10B981)",border:"none",color:"#fff",borderRadius:10,fontSize:13,fontWeight:800,cursor: totalSeleccionados === 0 ? "default" : "pointer",fontFamily:"'DM Sans'"}}>
+                ✓ Guardar {totalSeleccionados} ítem{totalSeleccionados!==1?'s':''}
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── PASO ERROR ── */}
+        {paso === "error" && (
+          <div style={{padding:"20px 14px",textAlign:"center"}}>
+            <div style={{fontSize:42,marginBottom:8}}>⚠️</div>
+            <div style={{fontSize:14,fontWeight:800,color:"var(--red)",marginBottom:6}}>Error al analizar</div>
+            <div style={{fontSize:11,color:"var(--muted)",marginBottom:14,padding:"8px 11px",background:"rgba(255,75,110,.06)",border:"1px solid rgba(255,75,110,.2)",borderRadius:8,wordBreak:"break-word",lineHeight:1.5}}>
+              {error || "Error desconocido"}
+            </div>
+            <div style={{fontSize:10,color:"var(--muted)",marginBottom:14,lineHeight:1.5}}>
+              Posibles causas: foto demasiado borrosa, GEMINI_API_KEY no configurada en Cloudflare Pages, o servidor caído.
+            </div>
+            <button onClick={()=>{setPaso("captura");setError(null);setImagen(null);}}
+              style={{width:"100%",padding:"11px",background:"linear-gradient(135deg,#A78BFA,#8B5CF6)",border:"none",color:"#fff",borderRadius:10,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+              🔄 Intentar de nuevo
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
