@@ -2539,6 +2539,18 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
   const [gpsError, setGpsError] = useState(null);
   const [textoUbicacion, setTextoUbicacion] = useState("");
 
+  // Datos de cobro de la empresa (Yappy + Banco) leídos del admin_cfg.
+  // Se usan al confirmar el pago Yappy para mostrar a quién enviar el dinero.
+  const [cuentaEmpresa, setCuentaEmpresa] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const cfg = await fbRead("admin_cfg");
+        if (cfg?.cuentaEmpresa) setCuentaEmpresa(cfg.cuentaEmpresa);
+      } catch(e){}
+    })();
+  }, []);
+
   // ─── GPS REAL DEL VENDEDOR para cálculo correcto del delivery fee ─────────
   // El error de "14.9 km Zona lejana" para Israel venía de usar getVendorCoords
   // que devuelve Calle 50/San Francisco (Carlos demo) para vendedores desconocidos.
@@ -2914,9 +2926,33 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
           {pay==="efectivo"&&(
             <div style={{fontSize:10,color:"var(--muted)",marginTop:4}}>Ten listo <strong style={{color:"var(--gold)"}}>${total.toFixed(2)}</strong> en efectivo</div>
           )}
-          {pay==="yappy"&&(
-            <div style={{fontSize:10,color:"var(--blue)",marginTop:4}}>El repartidor generará el QR al momento de la entrega</div>
-          )}
+          {pay==="yappy"&&(() => {
+            const tel = cuentaEmpresa?.yappyTelefono;
+            const yappyOk = tel && tel.length === 8 && cuentaEmpresa?.yappyActivo;
+            if (!yappyOk) {
+              return (
+                <div style={{fontSize:10,color:"var(--red)",marginTop:4}}>
+                  ⚠️ Yappy no configurado. Selecciona efectivo o contacta al administrador.
+                </div>
+              );
+            }
+            return (
+              <div style={{marginTop:8,padding:"10px 12px",background:"rgba(59,158,255,.08)",border:"1px dashed rgba(59,158,255,.35)",borderRadius:9}}>
+                <div style={{fontSize:10,color:"var(--muted)",fontWeight:700,letterSpacing:.5,marginBottom:5}}>ENVÍA EL PAGO A:</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:800,color:"#3B9EFF"}}>📱 {tel.slice(0,4)}-{tel.slice(4)}</div>
+                    <div style={{fontSize:10,color:"var(--muted)"}}>{cuentaEmpresa.yappyTitular || cuentaEmpresa.razonSocial || "CHANCE"}</div>
+                  </div>
+                  <button onClick={()=>{navigator.clipboard?.writeText(tel); toast("📋 Copiado");}}
+                    style={{background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--text)",padding:"5px 9px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer"}}>Copiar</button>
+                </div>
+                <div style={{fontSize:9,color:"var(--muted)",marginTop:6,lineHeight:1.4}}>
+                  Después del pago, sube el comprobante desde "Mis pedidos". Tu pedido será verificado por el administrador.
+                </div>
+              </div>
+            );
+          })()}
         </div>
         <div className="row" style={{gap:7}}>
           <button className="btng" style={{flex:1}} onClick={()=>setStep(2)}>← Atrás</button>
@@ -3268,6 +3304,7 @@ function HistorialScreen({ nav, orders=[], onClientApprove, onClientReject, onPr
   const [replaceNum, setReplaceNum]         = useState("");
   const [replaceType, setReplaceType]       = useState("billete");
   const [replaceQty, setReplaceQty]         = useState(1);
+  const [comprobanteOrderId, setComprobanteOrderId] = useState(null);  // orderId subiendo comprobante Yappy
 
   const realOrders = orders.length>0 ? orders : [
     {id:"CH-2398",createdAt:"Ayer",num:"07",type:"chance",lotteryValue:"0.25",deliveryFee:"2.50",tip:"0",paymentMethod:"YAPPY",status:"ENTREGADO"},
@@ -3395,6 +3432,37 @@ function HistorialScreen({ nav, orders=[], onClientApprove, onClientReject, onPr
               {/* Nota del vendedor */}
               {o.vendorNote&&<div style={{fontSize:9,color:"var(--gold)",marginTop:6,fontStyle:"italic"}}>💬 "{o.vendorNote}"</div>}
             </div>
+
+            {/* ── BANNER: COMPROBANTE YAPPY PENDIENTE / VERIFICADO ── */}
+            {o.paymentMethod==="YAPPY" && (
+              o.yappyVerificado ? (
+                <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 11px",background:"rgba(0,214,143,.08)",border:"1px solid rgba(0,214,143,.25)",borderRadius:9,marginBottom:9}}>
+                  <span style={{fontSize:14}}>✅</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:11,fontWeight:800,color:"var(--green)"}}>Pago Yappy verificado</div>
+                    <div style={{fontSize:9,color:"var(--muted)"}}>Tu comprobante fue aprobado por el administrador</div>
+                  </div>
+                </div>
+              ) : o.yappyComprobante ? (
+                <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 11px",background:"rgba(59,158,255,.08)",border:"1px solid rgba(59,158,255,.25)",borderRadius:9,marginBottom:9}}>
+                  <span style={{fontSize:14}}>⏱</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:11,fontWeight:800,color:"var(--blue)"}}>Comprobante en revisión</div>
+                    <div style={{fontSize:9,color:"var(--muted)"}}>El administrador validará tu pago Yappy pronto</div>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={()=>setComprobanteOrderId(o.id)}
+                  style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"10px 12px",background:"rgba(244,196,48,.12)",border:"1.5px dashed rgba(244,196,48,.45)",borderRadius:10,marginBottom:9,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+                  <span style={{fontSize:18}}>📸</span>
+                  <div style={{flex:1,textAlign:"left"}}>
+                    <div style={{fontSize:12,fontWeight:800,color:"var(--gold)"}}>Subir comprobante Yappy</div>
+                    <div style={{fontSize:9,color:"var(--muted)"}}>Necesario para que el admin apruebe tu pedido</div>
+                  </div>
+                  <Ic n="chevR" s={14} c="var(--gold)"/>
+                </button>
+              )
+            )}
 
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:isModified?10:0}}>
               <div style={{fontSize:10,color:"var(--muted)"}}>{o.paymentMethod==="YAPPY"?"📱 Yappy":"💵 Efectivo"}</div>
@@ -3544,6 +3612,168 @@ function HistorialScreen({ nav, orders=[], onClientApprove, onClientReject, onPr
           </div>
         );
       })}
+
+      {/* MODAL: subir comprobante de pago Yappy */}
+      {comprobanteOrderId && (
+        <ComprobanteYappyModal
+          orderId={comprobanteOrderId}
+          onClose={()=>setComprobanteOrderId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   MODAL: COMPROBANTE DE PAGO YAPPY
+   ─────────────────────────────────────────────────────────────────────────
+   Permite al comprador subir una foto del comprobante de su pago Yappy
+   y opcionalmente el número de referencia. Se guarda en Firebase como
+   base64 (comprimido a ~150KB max) dentro del pedido.
+───────────────────────────────────────────────────────────────────────── */
+function ComprobanteYappyModal({ orderId, onClose }) {
+  const [imagen, setImagen]         = useState(null);        // base64 comprimido listo
+  const [imagenPreview, setPreview] = useState(null);        // base64 para preview
+  const [referencia, setReferencia] = useState("");
+  const [enviando, setEnviando]     = useState(false);
+  const [procesando, setProcesando] = useState(false);
+  const fileRef = useRef(null);
+
+  // Comprime imagen a JPG max ~1024px, calidad 0.75 → ~100-200 KB típico
+  const procesarArchivo = (file) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast("⚠️ Selecciona una imagen");
+      return;
+    }
+    setProcesando(true);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        // Redimensionar manteniendo aspect ratio (max 1024px de lado mayor)
+        const maxDim = 1024;
+        let w = img.width, h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
+          else       { w = Math.round(w * maxDim / h); h = maxDim; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#FFFFFF"; ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        const compressed = canvas.toDataURL("image/jpeg", 0.75);
+        const tamKB = Math.round((compressed.length * 0.75) / 1024);  // aprox
+        if (tamKB > 800) {
+          // Comprimir más si sigue grande
+          const more = canvas.toDataURL("image/jpeg", 0.55);
+          setImagen(more);
+          setPreview(more);
+        } else {
+          setImagen(compressed);
+          setPreview(compressed);
+        }
+        setProcesando(false);
+      };
+      img.onerror = () => { toast("❌ Imagen inválida"); setProcesando(false); };
+      img.src = e.target.result;
+    };
+    reader.onerror = () => { toast("❌ Error al leer archivo"); setProcesando(false); };
+    reader.readAsDataURL(file);
+  };
+
+  const handleFile = (e) => procesarArchivo(e.target.files?.[0]);
+
+  const enviar = async () => {
+    if (!imagen) { toast("⚠️ Sube la foto del comprobante"); return; }
+    setEnviando(true);
+    try {
+      // Leer pedido actual, añadir comprobante y guardar
+      const order = await fbRead(`pedidos/${orderId}`);
+      if (!order) {
+        toast("❌ No se encontró el pedido");
+        setEnviando(false);
+        return;
+      }
+      const updated = {
+        ...order,
+        yappyComprobante: imagen,
+        yappyReferencia: referencia.trim() || null,
+        yappyCompronbanteSubidoEn: Date.now(),
+      };
+      await fbWrite(`pedidos/${orderId}`, updated);
+      toast("✅ Comprobante enviado. El admin lo revisará pronto.");
+      onClose?.();
+    } catch (e) {
+      toast("❌ Error al enviar: " + e.message);
+    }
+    setEnviando(false);
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.78)",zIndex:999,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
+      <div style={{background:"var(--bg2)",borderRadius:"20px 20px 0 0",padding:"20px 18px 24px",width:"100%",maxWidth:480,maxHeight:"92vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+          <div>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:"var(--gold)",letterSpacing:2}}>📸 COMPROBANTE YAPPY</div>
+            <div style={{fontSize:10,color:"var(--muted)",marginTop:2}}>Pedido #{orderId.slice(-6)}</div>
+          </div>
+          <button onClick={onClose} style={{background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:9,width:32,height:32,cursor:"pointer"}}><Ic n="close" s={13} c="var(--muted)"/></button>
+        </div>
+
+        <div style={{background:"rgba(59,158,255,.07)",border:"1px solid rgba(59,158,255,.22)",borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:11,color:"var(--muted)",lineHeight:1.5}}>
+          📱 Sube una foto clara del comprobante Yappy que recibiste tras hacer el pago. Incluye el número de referencia si lo tienes a mano.
+        </div>
+
+        {/* Selector / preview de imagen */}
+        {imagenPreview ? (
+          <div style={{position:"relative",marginBottom:12}}>
+            <img src={imagenPreview} alt="comprobante"
+              style={{width:"100%",maxHeight:320,objectFit:"contain",borderRadius:11,background:"#000",border:"1px solid var(--border)"}}/>
+            <button onClick={()=>{setImagen(null);setPreview(null);}}
+              style={{position:"absolute",top:8,right:8,background:"rgba(255,75,110,.85)",border:"none",color:"#fff",borderRadius:18,padding:"5px 11px",fontSize:11,fontWeight:800,cursor:"pointer"}}>
+              ✕ Cambiar
+            </button>
+          </div>
+        ) : (
+          <button onClick={()=>fileRef.current?.click()} disabled={procesando}
+            style={{
+              width:"100%", padding:"30px 14px", marginBottom:12,
+              background:"var(--bg3)", border:"2px dashed var(--border)",
+              borderRadius:12, color:"var(--text)", cursor: procesando ? "default" : "pointer",
+              fontFamily:"'DM Sans',sans-serif", display:"flex", flexDirection:"column",
+              alignItems:"center", gap:9
+            }}>
+            <div style={{fontSize:42}}>{procesando ? "⏳" : "📸"}</div>
+            <div style={{fontSize:13,fontWeight:800}}>{procesando ? "Procesando…" : "Tomar foto o elegir"}</div>
+            <div style={{fontSize:10,color:"var(--muted)"}}>JPG, PNG · hasta ~5 MB original</div>
+          </button>
+        )}
+        <input ref={fileRef} type="file" accept="image/*" capture="environment"
+          style={{display:"none"}} onChange={handleFile}/>
+
+        {/* Referencia */}
+        <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:4}}>Número de referencia Yappy (opcional)</label>
+        <input value={referencia} onChange={e=>setReferencia(e.target.value)}
+          placeholder="Ej. 1234567890"
+          style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:9,padding:"11px 12px",color:"var(--text)",fontSize:13,marginBottom:14,fontFamily:"'DM Sans',sans-serif"}}/>
+
+        <button onClick={enviar} disabled={!imagen || enviando}
+          style={{
+            width:"100%", padding:"13px", borderRadius:11,
+            background: (!imagen || enviando) ? "var(--bg3)" : "linear-gradient(135deg,#00D68F,#10B981)",
+            border:"none", color:"#fff", fontSize:13, fontWeight:800,
+            cursor: (!imagen || enviando) ? "default" : "pointer",
+            fontFamily:"'DM Sans',sans-serif"
+          }}>
+          {enviando ? "Enviando…" : "✓ Enviar comprobante"}
+        </button>
+
+        <div style={{fontSize:10,color:"var(--muted)",marginTop:9,textAlign:"center",lineHeight:1.5}}>
+          La imagen se comprime automáticamente. Tu pedido quedará "en revisión" hasta que el admin verifique el pago.
+        </div>
+      </div>
     </div>
   );
 }
@@ -10189,6 +10419,8 @@ function NotifScreen() {
 
 function PerfilScreen({ authUser=null, onLogout=null, currentRole=null, onSwitchRole=null }) {
   const [switchedToComprador, setSwitchedToComprador] = useState(currentRole==="cliente");
+  const [showWallet, setShowWallet] = useState(false);
+  const [walletBalance, setWalletBalance] = useState(null);
 
   // Initials from name
   const initials = authUser?.nombre
@@ -10277,6 +10509,50 @@ function PerfilScreen({ authUser=null, onLogout=null, currentRole=null, onSwitch
           </div>
           <div style={{fontSize:10,color:"var(--muted)",marginTop:10,lineHeight:1.6,textAlign:"center"}}>
             Puedes alternar entre tu rol de <strong style={{color:roleColor}}>{roleLabel}</strong> y el módulo de <strong style={{color:"#00E5A0"}}>Comprador</strong> en cualquier momento.
+          </div>
+        </div>
+      )}
+
+      {/* ── TARJETA MI BALANCE (solo vendedor/repartidor) ── */}
+      {(isVendedor || isRepartidor) && authUser?.id && (() => {
+        // Cargar balance al renderizar
+        if (walletBalance === null) {
+          getWallet(authUser.id).then(w => setWalletBalance(w?.balance || 0));
+        }
+        return (
+          <div onClick={()=>setShowWallet(true)}
+            style={{
+              background:"linear-gradient(135deg,rgba(244,196,48,.12),rgba(244,196,48,.03))",
+              border:"1.5px solid rgba(244,196,48,.35)",
+              borderRadius:14, padding:"14px 16px", marginBottom:12,
+              cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center"
+            }}>
+            <div>
+              <div style={{fontSize:10,color:"var(--muted)",fontWeight:700,letterSpacing:1}}>💰 MI BALANCE</div>
+              <div style={{fontFamily:"'Bebas Neue'",fontSize:28,color:"var(--gold)",letterSpacing:1,lineHeight:1.1,marginTop:2}}>
+                ${(walletBalance != null ? walletBalance : 0).toFixed(2)}
+              </div>
+              <div style={{fontSize:10,color:"var(--muted)",marginTop:3}}>Tocar para ver y solicitar retiro</div>
+            </div>
+            <div style={{
+              width:38, height:38, borderRadius:11, background:"rgba(244,196,48,.15)",
+              display:"flex", alignItems:"center", justifyContent:"center"
+            }}>
+              <Ic n="chevR" s={16} c="var(--gold)"/>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Modal Wallet (cobros y retiros) */}
+      {showWallet && (
+        <div style={{position:"fixed",inset:0,background:"var(--bg)",zIndex:998,overflowY:"auto"}}>
+          <div style={{maxWidth:480,margin:"0 auto",padding:14}}>
+            <WalletScreen authUser={authUser} onClose={()=>{
+              setShowWallet(false);
+              // refrescar saldo al cerrar
+              if (authUser?.id) getWallet(authUser.id).then(w => setWalletBalance(w?.balance || 0));
+            }}/>
           </div>
         </div>
       )}
@@ -10852,6 +11128,35 @@ function App({ forceRole=null, authUser=null, onLogout=null,
   const deliverOrder = async (id) => {
     const order = sharedOrders.find(o => o.id === id);
     setSharedOrders(p=>p.map(o=>o.id!==id?o:{...o,status:"ENTREGADO",deliveredAt:ts()}));
+
+    // ── ACREDITAR WALLETS DE VENDEDOR Y REPARTIDOR ─────────────────────────
+    // Al entregar un pedido, distribuimos los ingresos según el motor de pagos:
+    //   - Vendedor: valor de lotería MENOS comisión 2.5% de la app
+    //   - Repartidor: delivery fee + tip
+    // El comprador ya pagó (efectivo al repartidor o Yappy a la empresa).
+    // Si pagó en efectivo, el repartidor luego tiene que liquidar la parte
+    // del vendedor en la jornada de cuadre diaria.
+    if (order) {
+      try {
+        const lotteryValue = parseFloat(order.lotteryValue || order.total || 0);
+        const deliveryFee  = parseFloat(order.deliveryFee  || 0);
+        const tip          = parseFloat(order.tip          || 0);
+        const cfg          = (await fbRead("admin_cfg")) || {};
+        const commPct      = cfg.commissionPctVendor || 2.5;
+        const vendorReceives = +(lotteryValue * (1 - commPct/100)).toFixed(2);
+        const driverEarns    = +(deliveryFee + tip).toFixed(2);
+
+        if (order.vendorId && vendorReceives > 0) {
+          await creditWallet(order.vendorId, vendorReceives, "VENTA",
+            `Venta entregada · Pedido #${id.slice(-6)}`, id);
+        }
+        if (order.assignedRepartidorId && driverEarns > 0) {
+          await creditWallet(order.assignedRepartidorId, driverEarns, "DELIVERY",
+            `Delivery completado · Pedido #${id.slice(-6)}`, id);
+        }
+      } catch (e) { console.warn("Wallet credit on deliver:", e); }
+    }
+
     // Si el cliente tenía un bloqueo y completó el pedido con Yappy (pago anticipado),
     // se libera el bloqueo automáticamente. Pedidos en efectivo también liberan el
     // bloqueo si llegan a entregarse exitosamente (el cliente cumplió esta vez).
@@ -11522,6 +11827,132 @@ function useStorage(key, def) {
     try { await window.storage.set(key, JSON.stringify(v)); } catch(e) {}
   };
   return [val, save];
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   ▼  SISTEMA DE PAGOS, WALLETS Y COBROS  ▼
+   ─────────────────────────────────────────────────────────────────────────
+   Arquitectura de pagos de CHANCE (estilo PedidosYa/Uber Eats):
+
+   1. WALLETS — cada vendedor/repartidor tiene un balance acumulado en
+      Firebase `/wallets/{userId}`. Se acredita automáticamente cuando un
+      pedido se marca ENTREGADO. El admin puede ajustar manualmente.
+
+   2. YAPPY DEL COMPRADOR — al pagar con Yappy el comprador ve el teléfono
+      Yappy de la empresa CHANCE (configurable desde Admin), hace el pago
+      en su app de banco y sube una foto del comprobante. El pedido queda
+      PENDIENTE_VERIFICACION hasta que el admin lo aprueba (o el sistema
+      lo valida automáticamente si se integra con la API de Yappy Comercial).
+
+   3. CASHOUTS — vendedores/repartidores solicitan retiro de su balance
+      vía Yappy o transferencia bancaria. Path Firebase `/cashouts/{id}`.
+      Estados: SOLICITADO → APROBADO → PAGADO  (o RECHAZADO).
+
+   4. PAGOS MANUALES — admin puede pagar comisiones, bonos o reembolsos
+      a cualquier usuario. Quedan registrados en `/pagosManuales/{id}`.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+// Helper: leer wallet desde Firebase (o crear vacío si no existe)
+async function getWallet(userId) {
+  if (!userId) return null;
+  try {
+    const w = await fbRead(`wallets/${userId}`);
+    return w || { balance: 0, totalGanado: 0, totalRetirado: 0, transacciones: [] };
+  } catch (e) {
+    console.warn("getWallet:", e);
+    return { balance: 0, totalGanado: 0, totalRetirado: 0, transacciones: [] };
+  }
+}
+
+// Helper: acreditar al wallet de un usuario (suma al balance)
+// tipo: "VENTA" | "DELIVERY" | "BONO" | "AJUSTE"
+async function creditWallet(userId, monto, tipo, descripcion, refId = null) {
+  if (!userId || !monto || monto <= 0) return false;
+  try {
+    const current = await getWallet(userId);
+    const tx = {
+      id: `tx-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+      fecha: new Date().toISOString(),
+      tipo, monto: +monto, descripcion, refId,
+      direccion: "CREDITO",
+    };
+    const next = {
+      balance:       +(current.balance + monto).toFixed(2),
+      totalGanado:   +(current.totalGanado + monto).toFixed(2),
+      totalRetirado: current.totalRetirado || 0,
+      transacciones: [tx, ...(current.transacciones || [])].slice(0, 100),
+      actualizadoEn: Date.now(),
+    };
+    await fbWrite(`wallets/${userId}`, next);
+    return tx;
+  } catch (e) { console.warn("creditWallet:", e); return false; }
+}
+
+// Helper: debitar del wallet (retiro, ajuste negativo)
+async function debitWallet(userId, monto, tipo, descripcion, refId = null) {
+  if (!userId || !monto || monto <= 0) return false;
+  try {
+    const current = await getWallet(userId);
+    if (current.balance < monto) return { error: "SALDO_INSUFICIENTE", balance: current.balance };
+    const tx = {
+      id: `tx-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
+      fecha: new Date().toISOString(),
+      tipo, monto: +monto, descripcion, refId,
+      direccion: "DEBITO",
+    };
+    const next = {
+      balance:       +(current.balance - monto).toFixed(2),
+      totalGanado:   current.totalGanado || 0,
+      totalRetirado: +((current.totalRetirado || 0) + monto).toFixed(2),
+      transacciones: [tx, ...(current.transacciones || [])].slice(0, 100),
+      actualizadoEn: Date.now(),
+    };
+    await fbWrite(`wallets/${userId}`, next);
+    return tx;
+  } catch (e) { console.warn("debitWallet:", e); return false; }
+}
+
+// Helper: crear solicitud de retiro (cashout) por vendedor/repartidor
+async function createCashout({ userId, userName, userRol, monto, metodo, datosPago }) {
+  const id = `co-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  const cashout = {
+    id, userId, userName, userRol,
+    monto: +monto,
+    metodo,        // "YAPPY" | "BANCO"
+    datosPago,     // { yappyTel?, banco?, tipoCuenta?, numeroCuenta?, titular? }
+    estado: "SOLICITADO",
+    solicitadoEn: Date.now(),
+    aprobadoEn: null, pagadoEn: null,
+    referenciaPago: null, motivoRechazo: null,
+  };
+  try {
+    await fbWrite(`cashouts/${id}`, cashout);
+    return cashout;
+  } catch (e) { console.warn("createCashout:", e); return null; }
+}
+
+// Helper: aprobar/rechazar/pagar un cashout (admin)
+async function updateCashout(cashoutId, patch) {
+  if (!cashoutId) return false;
+  try {
+    const cur = await fbRead(`cashouts/${cashoutId}`);
+    if (!cur) return false;
+    const next = { ...cur, ...patch };
+    await fbWrite(`cashouts/${cashoutId}`, next);
+    return next;
+  } catch (e) { console.warn("updateCashout:", e); return false; }
+}
+
+// Helper: registrar pago manual del admin a un usuario
+async function registrarPagoManual({ adminId, destinatarioId, destinatarioRol, monto, motivo, metodo, referencia }) {
+  const id = `pm-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+  const pago = {
+    id, adminId, destinatarioId, destinatarioRol,
+    monto: +monto, motivo, metodo, referencia,
+    fecha: Date.now(),
+  };
+  try { await fbWrite(`pagosManuales/${id}`, pago); return pago; }
+  catch (e) { console.warn("registrarPagoManual:", e); return null; }
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -12353,6 +12784,619 @@ function PendingApprovalScreen({ user, onLogout }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+   ADMIN — SECCIÓN DE PAGOS Y RETIROS
+   ─────────────────────────────────────────────────────────────────────────
+   Permite al admin:
+   - Ver y aprobar/rechazar solicitudes de retiro (cashouts) de vendedores
+     y repartidores.
+   - Marcar cashouts como pagados (con referencia).
+   - Realizar pagos manuales a cualquier usuario (refunds, bonos, ajustes).
+   - Ver comprobantes de pago Yappy de compradores pendientes de aprobación.
+───────────────────────────────────────────────────────────────────────── */
+function AdminPagosSection({ adminUser, adminCfg }) {
+  const [tab, setTab] = useState("cashouts");
+  const [cashouts, setCashouts] = useState([]);
+  const [yappyPending, setYappyPending] = useState([]);
+  const [pagosManuales, setPagosManuales] = useState([]);
+  const [showPagoManual, setShowPagoManual] = useState(false);
+
+  // Lectura inicial de cashouts, pedidos Yappy pendientes, y pagos manuales
+  useEffect(() => {
+    (async () => {
+      try {
+        const co = await fbRead("cashouts");
+        if (co) setCashouts(Object.values(co).sort((a,b)=>b.solicitadoEn-a.solicitadoEn));
+        const pm = await fbRead("pagosManuales");
+        if (pm) setPagosManuales(Object.values(pm).sort((a,b)=>b.fecha-a.fecha));
+        const pedidos = await fbRead("pedidos");
+        if (pedidos) {
+          const yp = Object.values(pedidos).filter(p =>
+            p.paymentMethod === "YAPPY" && p.yappyComprobante && !p.yappyVerificado
+          );
+          setYappyPending(yp);
+        }
+      } catch (e) { console.warn("AdminPagos load:", e); }
+    })();
+    // Listener para refrescar en tiempo real
+    const stopCO = fbListen?.("cashouts", (data) => {
+      if (data) setCashouts(Object.values(data).sort((a,b)=>b.solicitadoEn-a.solicitadoEn));
+    });
+    return () => { try { stopCO && stopCO(); } catch(_){} };
+  }, []);
+
+  const aprobarCashout = async (co) => {
+    if (!window.confirm(`¿Aprobar retiro de $${co.monto.toFixed(2)} a ${co.userName}?`)) return;
+    await updateCashout(co.id, { estado: "APROBADO", aprobadoEn: Date.now() });
+    toast("✅ Cashout aprobado. Ahora procede el pago.");
+  };
+
+  const marcarPagado = async (co) => {
+    const ref = window.prompt(`Referencia del pago a ${co.userName} ($${co.monto.toFixed(2)}):`);
+    if (!ref) return;
+    // Debitar wallet del usuario
+    const debit = await debitWallet(co.userId, co.monto, "RETIRO", `Cashout aprobado · ${co.metodo}`, co.id);
+    if (debit?.error === "SALDO_INSUFICIENTE") {
+      toast(`❌ Saldo insuficiente. Balance actual: $${debit.balance.toFixed(2)}`);
+      return;
+    }
+    await updateCashout(co.id, { estado: "PAGADO", pagadoEn: Date.now(), referenciaPago: ref });
+    toast(`💸 Pagado a ${co.userName}: $${co.monto.toFixed(2)}`);
+  };
+
+  const rechazarCashout = async (co) => {
+    const motivo = window.prompt(`Motivo del rechazo:`);
+    if (!motivo) return;
+    await updateCashout(co.id, { estado: "RECHAZADO", motivoRechazo: motivo });
+    toast("❌ Cashout rechazado");
+  };
+
+  const aprobarYappyComprador = async (pedido) => {
+    if (!window.confirm(`¿Confirmar pago Yappy de $${pedido.totalUSD || pedido.total || "?"} de ${pedido.compradorNombre || pedido.userId}?`)) return;
+    try {
+      const next = { ...pedido, yappyVerificado: true, yappyVerificadoEn: Date.now(), yappyVerificadoPor: adminUser?.id };
+      await fbWrite(`pedidos/${pedido.id}`, next);
+      setYappyPending(yappyPending.filter(p => p.id !== pedido.id));
+      toast("✅ Pago Yappy verificado");
+    } catch(e) { toast("❌ Error al verificar: " + e.message); }
+  };
+
+  const pendientes = cashouts.filter(c => c.estado === "SOLICITADO" || c.estado === "APROBADO");
+  const historico  = cashouts.filter(c => c.estado === "PAGADO" || c.estado === "RECHAZADO");
+
+  return (
+    <>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:6}}>💸 PAGOS Y RETIROS</div>
+      <div style={{fontSize:11,color:"var(--muted)",marginBottom:14}}>Gestiona pagos a vendedores, repartidores y cobros de compradores.</div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:14}}>
+        {[
+          {k:"cashouts",l:`Retiros (${pendientes.length})`},
+          {k:"yappy",   l:`Yappy (${yappyPending.length})`},
+          {k:"manual",  l:"Pago manual"},
+          {k:"historico",l:"Historial"},
+        ].map(t=>(
+          <button key={t.k} onClick={()=>setTab(t.k)}
+            style={{
+              flex:1, padding:"8px 6px", borderRadius:9,
+              border: tab===t.k ? "1px solid #A78BFA" : "1px solid var(--border)",
+              background: tab===t.k ? "rgba(167,139,250,.15)" : "var(--bg2)",
+              color: tab===t.k ? "#A78BFA" : "var(--muted)",
+              fontSize:10, fontWeight:800, cursor:"pointer", fontFamily:"'DM Sans',sans-serif"
+            }}>{t.l}</button>
+        ))}
+      </div>
+
+      {/* TAB CASHOUTS */}
+      {tab === "cashouts" && (
+        <>
+          {pendientes.length === 0 ? (
+            <div className="admin-card" style={{textAlign:"center",padding:"20px"}}>
+              <div style={{fontSize:36,marginBottom:6}}>📭</div>
+              <div style={{fontSize:11,color:"var(--muted)"}}>No hay retiros pendientes</div>
+            </div>
+          ) : pendientes.map(co => (
+            <div key={co.id} className="admin-card" style={{marginBottom:9}}>
+              <div className="row" style={{justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                <div>
+                  <div style={{fontSize:13,fontWeight:800,color:"var(--text)"}}>{co.userName}</div>
+                  <div style={{fontSize:10,color:"var(--muted)"}}>{co.userRol} · {new Date(co.solicitadoEn).toLocaleString("es-PA")}</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontFamily:"'Bebas Neue'",fontSize:20,color:"var(--gold)",letterSpacing:1}}>${co.monto.toFixed(2)}</div>
+                  <div style={{fontSize:9,fontWeight:800,
+                    color: co.estado==="APROBADO" ? "#3B9EFF" : "var(--gold)",
+                    background: co.estado==="APROBADO" ? "rgba(59,158,255,.15)" : "rgba(244,196,48,.15)",
+                    padding:"2px 7px",borderRadius:5,marginTop:3,display:"inline-block"}}>{co.estado}</div>
+                </div>
+              </div>
+
+              <div style={{background:"var(--bg3)",borderRadius:7,padding:"7px 9px",fontSize:11,color:"var(--text)",marginBottom:9}}>
+                {co.metodo === "YAPPY" ? (
+                  <>📱 Yappy: <strong>{co.datosPago?.yappyTel || "—"}</strong></>
+                ) : (
+                  <>🏦 {co.datosPago?.banco || ""} · {co.datosPago?.tipoCuenta || ""}<br/>
+                  <span style={{fontSize:10,color:"var(--muted)"}}>Cta: {co.datosPago?.numeroCuenta || "—"} · {co.datosPago?.titular || ""}</span></>
+                )}
+              </div>
+
+              <div style={{display:"flex",gap:6}}>
+                {co.estado === "SOLICITADO" && (
+                  <>
+                    <button onClick={()=>aprobarCashout(co)} style={{flex:1,background:"rgba(0,214,143,.15)",border:"1px solid rgba(0,214,143,.4)",color:"var(--green)",padding:"7px",borderRadius:7,fontSize:11,fontWeight:800,cursor:"pointer"}}>✓ Aprobar</button>
+                    <button onClick={()=>rechazarCashout(co)} style={{flex:1,background:"rgba(255,75,110,.15)",border:"1px solid rgba(255,75,110,.4)",color:"var(--red)",padding:"7px",borderRadius:7,fontSize:11,fontWeight:800,cursor:"pointer"}}>✗ Rechazar</button>
+                  </>
+                )}
+                {co.estado === "APROBADO" && (
+                  <button onClick={()=>marcarPagado(co)} style={{flex:1,background:"linear-gradient(135deg,#3B9EFF,#2563EB)",border:"none",color:"#fff",padding:"8px",borderRadius:7,fontSize:11,fontWeight:800,cursor:"pointer"}}>💸 Marcar como pagado</button>
+                )}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+
+      {/* TAB YAPPY pendientes de comprador */}
+      {tab === "yappy" && (
+        <>
+          {yappyPending.length === 0 ? (
+            <div className="admin-card" style={{textAlign:"center",padding:"20px"}}>
+              <div style={{fontSize:36,marginBottom:6}}>📱</div>
+              <div style={{fontSize:11,color:"var(--muted)"}}>No hay pagos Yappy pendientes de verificación</div>
+            </div>
+          ) : yappyPending.map(p => (
+            <div key={p.id} className="admin-card" style={{marginBottom:9}}>
+              <div className="row" style={{justifyContent:"space-between",marginBottom:8}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:800,color:"var(--text)"}}>{p.compradorNombre || p.userId}</div>
+                  <div style={{fontSize:10,color:"var(--muted)"}}>Pedido #{(p.id||"").slice(-6)} · {new Date(p.createdAt||Date.now()).toLocaleString("es-PA")}</div>
+                </div>
+                <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--gold)"}}>${p.totalUSD || p.total || "?"}</div>
+              </div>
+              {p.yappyComprobante && (
+                <img src={p.yappyComprobante} alt="comprobante"
+                  style={{width:"100%",maxHeight:180,objectFit:"contain",borderRadius:7,background:"#000",marginBottom:9}}/>
+              )}
+              {p.yappyReferencia && (
+                <div style={{fontSize:10,color:"var(--muted)",marginBottom:6}}>Ref Yappy: <strong style={{color:"var(--text)"}}>{p.yappyReferencia}</strong></div>
+              )}
+              <button onClick={()=>aprobarYappyComprador(p)} style={{width:"100%",background:"linear-gradient(135deg,#00D68F,#10B981)",border:"none",color:"#fff",padding:"9px",borderRadius:8,fontSize:12,fontWeight:800,cursor:"pointer"}}>✓ Verificar pago Yappy</button>
+            </div>
+          ))}
+        </>
+      )}
+
+      {/* TAB PAGO MANUAL */}
+      {tab === "manual" && (
+        <PagoManualForm adminUser={adminUser} onDone={()=>{
+          fbRead("pagosManuales").then(pm=>{
+            if (pm) setPagosManuales(Object.values(pm).sort((a,b)=>b.fecha-a.fecha));
+          });
+        }}/>
+      )}
+
+      {/* TAB HISTORICO */}
+      {tab === "historico" && (
+        <>
+          {historico.length === 0 && pagosManuales.length === 0 ? (
+            <div className="admin-card" style={{textAlign:"center",padding:"20px"}}>
+              <div style={{fontSize:36,marginBottom:6}}>📜</div>
+              <div style={{fontSize:11,color:"var(--muted)"}}>Sin historial de pagos</div>
+            </div>
+          ) : (
+            <>
+              {historico.length > 0 && <div style={{fontSize:10,fontWeight:800,color:"var(--muted)",letterSpacing:1,marginBottom:6}}>RETIROS</div>}
+              {historico.slice(0,30).map(co => (
+                <div key={co.id} className="admin-card" style={{marginBottom:7,padding:"10px 12px"}}>
+                  <div className="row" style={{justifyContent:"space-between"}}>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>{co.userName}</div>
+                      <div style={{fontSize:10,color:"var(--muted)"}}>{new Date(co.pagadoEn || co.solicitadoEn).toLocaleString("es-PA")}{co.referenciaPago?` · Ref: ${co.referenciaPago}`:""}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontFamily:"'Bebas Neue'",fontSize:16,color: co.estado==="PAGADO" ? "var(--green)" : "var(--red)"}}>${co.monto.toFixed(2)}</div>
+                      <div style={{fontSize:9,color: co.estado==="PAGADO" ? "var(--green)" : "var(--red)",fontWeight:800}}>{co.estado}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {pagosManuales.length > 0 && <div style={{fontSize:10,fontWeight:800,color:"var(--muted)",letterSpacing:1,margin:"14px 0 6px"}}>PAGOS MANUALES</div>}
+              {pagosManuales.slice(0,30).map(p => (
+                <div key={p.id} className="admin-card" style={{marginBottom:7,padding:"10px 12px"}}>
+                  <div className="row" style={{justifyContent:"space-between"}}>
+                    <div>
+                      <div style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>→ {p.destinatarioRol} #{(p.destinatarioId||"").slice(-6)}</div>
+                      <div style={{fontSize:10,color:"var(--muted)"}}>{p.motivo} · {new Date(p.fecha).toLocaleString("es-PA")}</div>
+                    </div>
+                    <div style={{fontFamily:"'Bebas Neue'",fontSize:16,color:"var(--gold)"}}>${p.monto.toFixed(2)}</div>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+/* Sub-componente: formulario de pago manual del admin */
+function PagoManualForm({ adminUser, onDone }) {
+  const [users, setUsers] = useState([]);
+  const [destId, setDestId] = useState("");
+  const [monto, setMonto] = useState("");
+  const [motivo, setMotivo] = useState("");
+  const [metodo, setMetodo] = useState("YAPPY");
+  const [referencia, setReferencia] = useState("");
+  const [enviando, setEnviando] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get("users_db");
+        if (r?.value) setUsers(JSON.parse(r.value).filter(u => u.rol !== "admin"));
+      } catch(e){}
+    })();
+  }, []);
+
+  const handleSubmit = async () => {
+    if (!destId || !monto || !motivo) { toast("⚠️ Completa todos los campos"); return; }
+    const m = parseFloat(monto);
+    if (isNaN(m) || m <= 0) { toast("⚠️ Monto inválido"); return; }
+    setEnviando(true);
+    const dest = users.find(u => u.id === destId);
+    if (!dest) { toast("⚠️ Usuario no encontrado"); setEnviando(false); return; }
+    // Si es un BONO o AJUSTE al wallet del usuario, acreditamos
+    if (motivo.toLowerCase().includes("bono") || motivo.toLowerCase().includes("ajuste") || motivo.toLowerCase().includes("comisión") || motivo.toLowerCase().includes("comision")) {
+      await creditWallet(destId, m, "BONO", motivo);
+    }
+    await registrarPagoManual({
+      adminId: adminUser?.id || "admin",
+      destinatarioId: destId,
+      destinatarioRol: dest.rol,
+      monto: m, motivo, metodo, referencia
+    });
+    toast(`✅ Pago de $${m.toFixed(2)} registrado a ${dest.nombre}`);
+    setDestId(""); setMonto(""); setMotivo(""); setReferencia("");
+    setEnviando(false);
+    onDone?.();
+  };
+
+  return (
+    <div className="admin-card">
+      <div style={{fontSize:10,fontWeight:800,color:"#A78BFA",letterSpacing:1,marginBottom:10}}>NUEVO PAGO MANUAL</div>
+
+      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Destinatario</label>
+      <select value={destId} onChange={e=>setDestId(e.target.value)}
+        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,marginBottom:10,fontFamily:"'DM Sans',sans-serif"}}>
+        <option value="">— Selecciona usuario —</option>
+        {users.map(u=>(
+          <option key={u.id} value={u.id}>{u.nombre} ({u.rol})</option>
+        ))}
+      </select>
+
+      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Monto (USD)</label>
+      <input type="number" step="0.01" min="0" value={monto} onChange={e=>setMonto(e.target.value)}
+        placeholder="0.00"
+        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,marginBottom:10,fontFamily:"'DM Sans',sans-serif"}}/>
+
+      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Motivo</label>
+      <input value={motivo} onChange={e=>setMotivo(e.target.value)}
+        placeholder="Ej. Bono de fidelidad, Reembolso pedido #XXX, Ajuste comisión…"
+        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,marginBottom:10,fontFamily:"'DM Sans',sans-serif"}}/>
+
+      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Método de pago</label>
+      <select value={metodo} onChange={e=>setMetodo(e.target.value)}
+        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,marginBottom:10,fontFamily:"'DM Sans',sans-serif"}}>
+        <option value="YAPPY">📱 Yappy</option>
+        <option value="TRANSFERENCIA">🏦 Transferencia bancaria</option>
+        <option value="EFECTIVO">💵 Efectivo</option>
+        <option value="WALLET">💰 Crédito al wallet (sin salida de dinero)</option>
+      </select>
+
+      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Referencia (opcional)</label>
+      <input value={referencia} onChange={e=>setReferencia(e.target.value)}
+        placeholder="Nº de transacción o nota interna"
+        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,marginBottom:12,fontFamily:"'DM Sans',sans-serif"}}/>
+
+      <button onClick={handleSubmit} disabled={enviando}
+        style={{width:"100%",background: enviando ? "var(--bg3)" : "linear-gradient(135deg,#A78BFA,#8B5CF6)",border:"none",color:"#fff",padding:"11px",borderRadius:9,fontSize:13,fontWeight:800,cursor: enviando ? "default" : "pointer",fontFamily:"'DM Sans',sans-serif"}}>
+        {enviando ? "Procesando…" : "💸 Registrar pago"}
+      </button>
+
+      <div style={{fontSize:10,color:"var(--muted)",marginTop:9,padding:"8px 10px",background:"rgba(59,158,255,.05)",borderRadius:7,lineHeight:1.5}}>
+        ℹ️ Si el motivo contiene "bono", "ajuste" o "comisión", el monto se acreditará automáticamente al wallet del usuario.
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   PANTALLA "MI BALANCE" — para vendedores y repartidores
+   ─────────────────────────────────────────────────────────────────────────
+   Muestra el balance acumulado del usuario, historial de transacciones, y
+   permite solicitar retiros vía Yappy o transferencia bancaria.
+───────────────────────────────────────────────────────────────────────── */
+function WalletScreen({ authUser, onClose }) {
+  const [wallet, setWallet] = useState({ balance: 0, totalGanado: 0, totalRetirado: 0, transacciones: [] });
+  const [misCashouts, setMisCashouts] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const userId = authUser?.id;
+
+  const recargar = async () => {
+    if (!userId) return;
+    const w = await getWallet(userId);
+    setWallet(w);
+    try {
+      const co = await fbRead("cashouts");
+      if (co) {
+        const mios = Object.values(co)
+          .filter(c => c.userId === userId)
+          .sort((a,b)=>b.solicitadoEn - a.solicitadoEn);
+        setMisCashouts(mios);
+      }
+    } catch(e){}
+    setLoading(false);
+  };
+
+  useEffect(() => { recargar(); }, [userId]);
+
+  // Listener tiempo real del wallet del usuario
+  useEffect(() => {
+    if (!userId || !fbListen) return;
+    const stop = fbListen(`wallets/${userId}`, (data) => {
+      if (data) setWallet(data);
+    });
+    return () => { try { stop && stop(); } catch(_){} };
+  }, [userId]);
+
+  if (loading) {
+    return <div style={{padding:30,textAlign:"center",color:"var(--muted)"}}>Cargando…</div>;
+  }
+
+  return (
+    <div className="sc fu" style={{position:"relative"}}>
+      <div className="row" style={{justifyContent:"space-between",marginBottom:14}}>
+        <div style={{fontFamily:"'Bebas Neue'",fontSize:24,color:"var(--gold)",letterSpacing:2}}>💰 MI BALANCE</div>
+        {onClose && <button onClick={onClose} style={{background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:9,width:34,height:34,cursor:"pointer"}}><Ic n="close" s={14} c="var(--muted)"/></button>}
+      </div>
+
+      {/* Tarjeta principal del balance */}
+      <div style={{
+        background:"linear-gradient(135deg,rgba(244,196,48,.12),rgba(244,196,48,.03))",
+        border:"2px solid rgba(244,196,48,.35)",
+        borderRadius:18, padding:"20px", marginBottom:14, textAlign:"center"
+      }}>
+        <div style={{fontSize:11,color:"var(--muted)",fontWeight:700,letterSpacing:1.5,marginBottom:6}}>BALANCE DISPONIBLE</div>
+        <div style={{fontFamily:"'Bebas Neue'",fontSize:56,color:"var(--gold)",letterSpacing:2,lineHeight:1}}>${(wallet.balance||0).toFixed(2)}</div>
+        <div style={{display:"flex",justifyContent:"space-around",marginTop:14,paddingTop:14,borderTop:"1px solid rgba(244,196,48,.15)"}}>
+          <div>
+            <div style={{fontSize:9,color:"var(--muted)",fontWeight:700}}>TOTAL GANADO</div>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--green)"}}>${(wallet.totalGanado||0).toFixed(2)}</div>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:"var(--muted)",fontWeight:700}}>TOTAL RETIRADO</div>
+            <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--red)"}}>${(wallet.totalRetirado||0).toFixed(2)}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Botón principal solicitar retiro */}
+      <button onClick={()=>{
+        if (wallet.balance < 5) { toast("⚠️ Monto mínimo de retiro: $5.00"); return; }
+        setShowForm(true);
+      }}
+        style={{
+          width:"100%",
+          background: wallet.balance >= 5 ? "linear-gradient(135deg,#00D68F,#10B981)" : "var(--bg3)",
+          border:"none", color:"#fff", padding:"13px", borderRadius:11,
+          fontSize:13, fontWeight:800, cursor: wallet.balance >= 5 ? "pointer" : "default",
+          fontFamily:"'DM Sans',sans-serif", marginBottom:14
+        }}>
+        {wallet.balance >= 5 ? "💸 Solicitar retiro" : "Mínimo $5.00 para retirar"}
+      </button>
+
+      {/* Mis solicitudes de retiro */}
+      {misCashouts.length > 0 && (
+        <>
+          <div style={{fontSize:10,fontWeight:800,color:"var(--muted)",letterSpacing:1,marginBottom:8}}>MIS SOLICITUDES DE RETIRO</div>
+          {misCashouts.slice(0,5).map(co => {
+            const color = co.estado === "PAGADO" ? "var(--green)"
+                       : co.estado === "RECHAZADO" ? "var(--red)"
+                       : co.estado === "APROBADO" ? "#3B9EFF" : "var(--gold)";
+            const ic = co.estado === "PAGADO" ? "✓"
+                    : co.estado === "RECHAZADO" ? "✗"
+                    : co.estado === "APROBADO" ? "⏱" : "⏳";
+            return (
+              <div key={co.id} className="card" style={{marginBottom:8,padding:"11px 13px"}}>
+                <div className="row" style={{justifyContent:"space-between"}}>
+                  <div>
+                    <div style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>{ic} {co.estado}</div>
+                    <div style={{fontSize:10,color:"var(--muted)",marginTop:2}}>{co.metodo==="YAPPY"?"📱 Yappy":"🏦 "+(co.datosPago?.banco||"Banco")} · {new Date(co.solicitadoEn).toLocaleDateString("es-PA")}</div>
+                    {co.referenciaPago && <div style={{fontSize:9,color:"var(--green)",marginTop:2}}>Ref: {co.referenciaPago}</div>}
+                    {co.motivoRechazo && <div style={{fontSize:9,color:"var(--red)",marginTop:2}}>Motivo: {co.motivoRechazo}</div>}
+                  </div>
+                  <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color}}>${co.monto.toFixed(2)}</div>
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {/* Historial de transacciones */}
+      {wallet.transacciones && wallet.transacciones.length > 0 && (
+        <>
+          <div style={{fontSize:10,fontWeight:800,color:"var(--muted)",letterSpacing:1,margin:"14px 0 8px"}}>MOVIMIENTOS RECIENTES</div>
+          {wallet.transacciones.slice(0,20).map(tx => (
+            <div key={tx.id} style={{display:"flex",justifyContent:"space-between",padding:"9px 12px",background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:8,marginBottom:6}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:11,fontWeight:700,color:"var(--text)"}}>{tx.descripcion}</div>
+                <div style={{fontSize:9,color:"var(--muted)"}}>{new Date(tx.fecha).toLocaleString("es-PA")} · {tx.tipo}</div>
+              </div>
+              <div style={{fontFamily:"'Bebas Neue'",fontSize:14,color: tx.direccion === "CREDITO" ? "var(--green)" : "var(--red)"}}>
+                {tx.direccion === "CREDITO" ? "+" : "−"}${tx.monto.toFixed(2)}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+
+      {(!wallet.transacciones || wallet.transacciones.length === 0) && misCashouts.length === 0 && (
+        <div className="card" style={{textAlign:"center",padding:"20px",marginTop:10}}>
+          <div style={{fontSize:36,marginBottom:6}}>📊</div>
+          <div style={{fontSize:11,color:"var(--muted)"}}>Tu balance se actualizará automáticamente cuando completes pedidos.</div>
+        </div>
+      )}
+
+      {/* Modal: formulario de solicitud de retiro */}
+      {showForm && (
+        <CashoutFormModal
+          authUser={authUser}
+          balance={wallet.balance || 0}
+          onClose={()=>setShowForm(false)}
+          onSubmitted={()=>{ setShowForm(false); recargar(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* Modal: formulario de solicitud de retiro (cashout) */
+function CashoutFormModal({ authUser, balance, onClose, onSubmitted }) {
+  const [monto, setMonto]     = useState("");
+  const [metodo, setMetodo]   = useState("YAPPY");
+  const [yappyTel, setYappyTel] = useState(authUser?.telefono || "");
+  const [banco, setBanco]     = useState("Banco General");
+  const [tipoC, setTipoC]     = useState("Cuenta de Ahorros");
+  const [numCta, setNumCta]   = useState("");
+  const [titular, setTitular] = useState(authUser?.nombre || "");
+  const [enviando, setEnviando] = useState(false);
+
+  const handleSubmit = async () => {
+    const m = parseFloat(monto);
+    if (isNaN(m) || m <= 0) { toast("⚠️ Monto inválido"); return; }
+    if (m < 5) { toast("⚠️ Monto mínimo: $5.00"); return; }
+    if (m > balance) { toast(`⚠️ Solo puedes retirar hasta $${balance.toFixed(2)}`); return; }
+
+    const datosPago = metodo === "YAPPY"
+      ? { yappyTel: yappyTel.replace(/\D/g,"") }
+      : { banco, tipoCuenta: tipoC, numeroCuenta: numCta, titular };
+
+    if (metodo === "YAPPY" && datosPago.yappyTel.length !== 8) {
+      toast("⚠️ Teléfono Yappy debe tener 8 dígitos"); return;
+    }
+    if (metodo === "BANCO" && (!datosPago.numeroCuenta || !datosPago.titular)) {
+      toast("⚠️ Completa los datos bancarios"); return;
+    }
+
+    setEnviando(true);
+    const co = await createCashout({
+      userId: authUser.id,
+      userName: authUser.nombre,
+      userRol: authUser.rol,
+      monto: m, metodo, datosPago
+    });
+    setEnviando(false);
+    if (co) {
+      toast("✅ Solicitud enviada. El admin la revisará pronto.");
+      onSubmitted();
+    } else {
+      toast("❌ Error al enviar la solicitud");
+    }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:999,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
+      <div style={{background:"var(--bg2)",borderRadius:"20px 20px 0 0",padding:"22px 18px",width:"100%",maxWidth:480,maxHeight:"90vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+          <div style={{fontFamily:"'Bebas Neue'",fontSize:22,color:"var(--gold)",letterSpacing:2}}>💸 SOLICITAR RETIRO</div>
+          <button onClick={onClose} style={{background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:9,width:32,height:32,cursor:"pointer"}}><Ic n="close" s={13} c="var(--muted)"/></button>
+        </div>
+
+        <div style={{background:"rgba(244,196,48,.08)",borderRadius:9,padding:"10px 13px",marginBottom:14}}>
+          <div style={{fontSize:10,color:"var(--muted)",fontWeight:700}}>BALANCE DISPONIBLE</div>
+          <div style={{fontFamily:"'Bebas Neue'",fontSize:26,color:"var(--gold)"}}>${balance.toFixed(2)}</div>
+        </div>
+
+        <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Monto a retirar (USD)</label>
+        <input type="number" step="0.01" min="5" max={balance} value={monto} onChange={e=>setMonto(e.target.value)}
+          placeholder={`Hasta $${balance.toFixed(2)}`}
+          style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 12px",color:"var(--text)",fontSize:14,marginBottom:5,fontFamily:"'Bebas Neue'",letterSpacing:1}}/>
+        <div style={{display:"flex",gap:5,marginBottom:13}}>
+          {[10, 25, Math.floor(balance/2), Math.floor(balance)].filter(v=>v>=5 && v<=balance).map(v=>(
+            <button key={v} onClick={()=>setMonto(String(v))}
+              style={{flex:1,background:"var(--bg3)",border:"1px solid var(--border)",color:"var(--muted)",padding:"6px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+              ${v}
+            </button>
+          ))}
+        </div>
+
+        <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:6}}>Método de retiro</label>
+        <div style={{display:"flex",gap:7,marginBottom:13}}>
+          {[
+            {k:"YAPPY",l:"📱 Yappy",d:"Instantáneo"},
+            {k:"BANCO",l:"🏦 Banco",d:"1-2 días hábiles"},
+          ].map(m=>(
+            <button key={m.k} onClick={()=>setMetodo(m.k)}
+              style={{flex:1,background: metodo===m.k ? "rgba(59,158,255,.15)" : "var(--bg3)",
+                border: metodo===m.k ? "1px solid #3B9EFF" : "1px solid var(--border)",
+                color: metodo===m.k ? "#3B9EFF" : "var(--text)",
+                padding:"11px 8px",borderRadius:9,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>
+              <div style={{fontSize:12,fontWeight:800}}>{m.l}</div>
+              <div style={{fontSize:9,marginTop:2,opacity:.7}}>{m.d}</div>
+            </button>
+          ))}
+        </div>
+
+        {metodo === "YAPPY" && (
+          <>
+            <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Tu teléfono Yappy (8 dígitos)</label>
+            <input value={yappyTel} onChange={e=>setYappyTel(e.target.value.replace(/\D/g,"").slice(0,8))}
+              placeholder="6XXX-XXXX" inputMode="numeric"
+              style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 12px",color:"var(--text)",fontSize:13,marginBottom:14,fontFamily:"'DM Sans',sans-serif"}}/>
+          </>
+        )}
+
+        {metodo === "BANCO" && (
+          <>
+            <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Banco</label>
+            <select value={banco} onChange={e=>setBanco(e.target.value)}
+              style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 12px",color:"var(--text)",fontSize:13,marginBottom:10}}>
+              {BANCOS.map(b=><option key={b} value={b}>{b}</option>)}
+            </select>
+            <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Tipo de cuenta</label>
+            <select value={tipoC} onChange={e=>setTipoC(e.target.value)}
+              style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 12px",color:"var(--text)",fontSize:13,marginBottom:10}}>
+              {TIPOS_CUENTA.map(t=><option key={t} value={t}>{t}</option>)}
+            </select>
+            <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Número de cuenta</label>
+            <input value={numCta} onChange={e=>setNumCta(e.target.value)}
+              placeholder="04-XX-XXXX-X"
+              style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 12px",color:"var(--text)",fontSize:13,marginBottom:10}}/>
+            <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Nombre del titular</label>
+            <input value={titular} onChange={e=>setTitular(e.target.value)}
+              placeholder="Nombre como aparece en el banco"
+              style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 12px",color:"var(--text)",fontSize:13,marginBottom:14}}/>
+          </>
+        )}
+
+        <button onClick={handleSubmit} disabled={enviando}
+          style={{width:"100%",background: enviando ? "var(--bg3)" : "linear-gradient(135deg,#00D68F,#10B981)",border:"none",color:"#fff",padding:"13px",borderRadius:10,fontSize:13,fontWeight:800,cursor: enviando ? "default" : "pointer",fontFamily:"'DM Sans',sans-serif"}}>
+          {enviando ? "Enviando…" : "✓ Enviar solicitud"}
+        </button>
+
+        <div style={{fontSize:10,color:"var(--muted)",marginTop:10,lineHeight:1.5,textAlign:"center"}}>
+          El admin revisará tu solicitud. Yappy: pago instantáneo · Banco: 1-2 días hábiles.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
    PANEL DE ADMINISTRADOR
 ───────────────────────────────────────────────────────────────────────── */
 function AdminPanel({ adminUser, onLogout }) {
@@ -12543,6 +13587,28 @@ function AdminPanel({ adminUser, onLogout }) {
     minPwdLen:         8,
     requireSpecialChar:true,
     blockAfterFails:   5,
+    // ─── CUENTA BANCARIA DE LA EMPRESA CHANCE ─────────────────────────────
+    // Datos de cobro/pago de la empresa. Se muestra al comprador en el flujo
+    // de pago Yappy y se usa para procesar los retiros de vendedores/repartidores.
+    cuentaEmpresa: {
+      // Razón social y datos legales
+      razonSocial:        "CHANCE Lotería S.A.",
+      rucCedulaJuridica:  "",
+      // Yappy comercial (Banco General)
+      yappyTelefono:      "",
+      yappyTitular:       "",
+      yappyActivo:        true,
+      // Cuenta bancaria principal
+      bancoPrincipal:     "Banco General",
+      tipoCuenta:         "Cuenta Corriente",
+      numeroCuenta:       "",
+      titularCuenta:      "",
+      // Métodos aceptados (toggles)
+      aceptaYappy:        true,
+      aceptaEfectivo:     true,
+      aceptaTransferencia:false,  // futuro
+      aceptaTarjeta:      false,  // futuro (Stripe / 2Checkout)
+    },
   });
 
   // Sub-pantalla de config activa: null | "sorteos" | "comisiones" | "zonas" | "notif" | "reportes" | "seguridad" | "terminos"
@@ -12817,13 +13883,15 @@ function AdminPanel({ adminUser, onLogout }) {
                   <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:14}}>CONFIGURACIÓN</div>
                   <div className="admin-card">
                     {[
-                      {key:"sorteos",   ic:"🎟",l:"Gestión de sorteos",      d:"Administra fechas y premios"},
-                      {key:"comisiones",ic:"💰",l:"Comisiones de la App",   d:"Edita % de comisión y delivery"},
-                      {key:"zonas",     ic:"📍",l:"Zonas de cobertura",     d:"Define áreas de entrega activas"},
-                      {key:"notif",     ic:"📢",l:"Notificaciones push",    d:"Enviar mensajes masivos"},
-                      {key:"reportes",  ic:"📊",l:"Reportes y métricas",    d:"Ventas, entregas, ingresos"},
-                      {key:"seguridad", ic:"🔒",l:"Seguridad",              d:"Políticas de contraseña, 2FA"},
-                      {key:"terminos",  ic:"📋",l:"Términos y condiciones", d:"Editar documentos legales"},
+                      {key:"sorteos",      ic:"🎟",l:"Gestión de sorteos",      d:"Administra fechas y premios"},
+                      {key:"comisiones",   ic:"💰",l:"Comisiones de la App",   d:"Edita % de comisión y delivery"},
+                      {key:"cuenta_empresa",ic:"🏦",l:"Cuenta de la empresa",  d:"Yappy, banco y métodos de cobro"},
+                      {key:"pagos",        ic:"💸",l:"Pagos y retiros",         d:"Cashouts, comisiones, pagos manuales"},
+                      {key:"zonas",        ic:"📍",l:"Zonas de cobertura",     d:"Define áreas de entrega activas"},
+                      {key:"notif",        ic:"📢",l:"Notificaciones push",    d:"Enviar mensajes masivos"},
+                      {key:"reportes",     ic:"📊",l:"Reportes y métricas",    d:"Ventas, entregas, ingresos"},
+                      {key:"seguridad",    ic:"🔒",l:"Seguridad",              d:"Políticas de contraseña, 2FA"},
+                      {key:"terminos",     ic:"📋",l:"Términos y condiciones", d:"Editar documentos legales"},
                     ].map((item)=>(
                       <div key={item.key} className="admin-row" style={{cursor:"pointer"}} onClick={()=>setCfgSection(item.key)}>
                         <div style={{width:36,height:36,borderRadius:10,background:"var(--bg3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>{item.ic}</div>
@@ -13150,6 +14218,107 @@ function AdminPanel({ adminUser, onLogout }) {
                   <button onClick={()=>toast("✅ Términos publicados")} style={{width:"100%",marginTop:12,background:"linear-gradient(135deg,#A78BFA,#8B5CF6)",border:"none",color:"#fff",padding:"12px",borderRadius:10,fontSize:13,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans',sans-serif"}}>📢 Publicar nueva versión</button>
                 </>
               )}
+
+              {/* ─── 8. CUENTA DE LA EMPRESA (Yappy + Banco) ─── */}
+              {cfgSection === "cuenta_empresa" && (() => {
+                const ce = adminCfg.cuentaEmpresa || {};
+                const updCE = (patch) => updateCfg({ cuentaEmpresa: { ...ce, ...patch } });
+                return (
+                  <>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"var(--text)",letterSpacing:2,marginBottom:6}}>🏦 CUENTA DE LA EMPRESA</div>
+                    <div style={{fontSize:11,color:"var(--muted)",marginBottom:14}}>Datos de cobro Yappy y bancario. Se muestran al comprador al pagar y se usan para procesar retiros.</div>
+
+                    <div style={{background:"rgba(244,196,48,.06)",border:"1px solid rgba(244,196,48,.25)",borderRadius:10,padding:"10px 12px",marginBottom:12,fontSize:10,color:"var(--muted)",lineHeight:1.5}}>
+                      ⚠️ <strong style={{color:"var(--gold)"}}>Datos sensibles.</strong> Estos datos identifican fiscalmente a la empresa. Asegúrate de que el RUC y el número de cuenta sean correctos antes de aceptar pagos en producción.
+                    </div>
+
+                    {/* Razón social y RUC */}
+                    <div className="admin-card" style={{marginBottom:10}}>
+                      <div style={{fontSize:10,fontWeight:800,color:"var(--gold)",letterSpacing:1,marginBottom:8}}>DATOS LEGALES</div>
+                      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Razón social</label>
+                      <input value={ce.razonSocial||""} onChange={e=>updCE({razonSocial:e.target.value})}
+                        placeholder="CHANCE Lotería S.A."
+                        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,marginBottom:10,fontFamily:"'DM Sans',sans-serif"}}/>
+                      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>RUC / Cédula jurídica</label>
+                      <input value={ce.rucCedulaJuridica||""} onChange={e=>updCE({rucCedulaJuridica:e.target.value})}
+                        placeholder="1234567-8-987654 DV 12"
+                        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,fontFamily:"'DM Sans',sans-serif"}}/>
+                    </div>
+
+                    {/* Yappy comercial */}
+                    <div className="admin-card" style={{marginBottom:10}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                        <div style={{fontSize:10,fontWeight:800,color:"#3B9EFF",letterSpacing:1}}>📱 YAPPY COMERCIAL</div>
+                        <label style={{display:"flex",alignItems:"center",gap:6,fontSize:10,color:"var(--muted)",cursor:"pointer"}}>
+                          <input type="checkbox" checked={!!ce.yappyActivo} onChange={e=>updCE({yappyActivo:e.target.checked})}/>
+                          Habilitar Yappy
+                        </label>
+                      </div>
+                      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Teléfono Yappy (8 dígitos)</label>
+                      <input value={ce.yappyTelefono||""} onChange={e=>updCE({yappyTelefono:e.target.value.replace(/\D/g,"").slice(0,8)})}
+                        placeholder="6XXX-XXXX" inputMode="numeric"
+                        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,marginBottom:10,fontFamily:"'DM Sans',sans-serif"}}/>
+                      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Titular del Yappy</label>
+                      <input value={ce.yappyTitular||""} onChange={e=>updCE({yappyTitular:e.target.value})}
+                        placeholder="CHANCE Lotería SA"
+                        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,fontFamily:"'DM Sans',sans-serif"}}/>
+                      {ce.yappyTelefono && ce.yappyTelefono.length===8 && (
+                        <div style={{marginTop:10,padding:"8px 10px",background:"rgba(59,158,255,.08)",border:"1px solid rgba(59,158,255,.2)",borderRadius:7,fontSize:11,color:"#3B9EFF"}}>
+                          ✓ Yappy listo: <strong>{ce.yappyTelefono.slice(0,4)}-{ce.yappyTelefono.slice(4)}</strong>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Cuenta bancaria */}
+                    <div className="admin-card" style={{marginBottom:10}}>
+                      <div style={{fontSize:10,fontWeight:800,color:"var(--green)",letterSpacing:1,marginBottom:8}}>🏦 CUENTA BANCARIA</div>
+                      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Banco</label>
+                      <select value={ce.bancoPrincipal||"Banco General"} onChange={e=>updCE({bancoPrincipal:e.target.value})}
+                        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,marginBottom:10,fontFamily:"'DM Sans',sans-serif"}}>
+                        {BANCOS.map(b=><option key={b} value={b}>{b}</option>)}
+                      </select>
+                      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Tipo de cuenta</label>
+                      <select value={ce.tipoCuenta||"Cuenta Corriente"} onChange={e=>updCE({tipoCuenta:e.target.value})}
+                        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,marginBottom:10,fontFamily:"'DM Sans',sans-serif"}}>
+                        {TIPOS_CUENTA.map(t=><option key={t} value={t}>{t}</option>)}
+                      </select>
+                      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Número de cuenta</label>
+                      <input value={ce.numeroCuenta||""} onChange={e=>updCE({numeroCuenta:e.target.value})}
+                        placeholder="04-XX-XXXX-X"
+                        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,marginBottom:10,fontFamily:"'DM Sans',sans-serif"}}/>
+                      <label style={{fontSize:10,color:"var(--muted)",display:"block",marginBottom:3}}>Titular de la cuenta</label>
+                      <input value={ce.titularCuenta||""} onChange={e=>updCE({titularCuenta:e.target.value})}
+                        placeholder="CHANCE Lotería SA"
+                        style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:7,padding:"8px 10px",color:"var(--text)",fontSize:12,fontFamily:"'DM Sans',sans-serif"}}/>
+                    </div>
+
+                    {/* Métodos de pago aceptados */}
+                    <div className="admin-card">
+                      <div style={{fontSize:10,fontWeight:800,color:"var(--gold)",letterSpacing:1,marginBottom:8}}>MÉTODOS DE COBRO ACEPTADOS</div>
+                      {[
+                        ["aceptaYappy",       "📱 Yappy",          "Pago móvil sin comisión bancaria"],
+                        ["aceptaEfectivo",    "💵 Efectivo",       "Pago contra entrega al repartidor"],
+                        ["aceptaTransferencia","🏦 Transferencia",  "Depósito o ACH al banco (verificación manual)"],
+                        ["aceptaTarjeta",     "💳 Tarjeta",        "Visa/Mastercard (próximamente)"],
+                      ].map(([k,l,d])=>(
+                        <label key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)",cursor:"pointer"}}>
+                          <div style={{flex:1}}>
+                            <div style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>{l}</div>
+                            <div style={{fontSize:10,color:"var(--muted)"}}>{d}</div>
+                          </div>
+                          <input type="checkbox" checked={!!ce[k]} onChange={e=>updCE({[k]:e.target.checked})}
+                            disabled={k==="aceptaTarjeta"}/>
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
+
+              {/* ─── 9. PAGOS Y RETIROS ─── */}
+              {cfgSection === "pagos" && (() => {
+                return <AdminPagosSection adminUser={adminUser} adminCfg={adminCfg}/>;
+              })()}
             </>
           )}
         </div>
