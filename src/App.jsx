@@ -12921,6 +12921,7 @@ function AdminPagosSection({ adminUser, adminCfg }) {
           {k:"yappy",   l:`Yappy (${yappyPending.length})`},
           {k:"manual",  l:"Pago manual"},
           {k:"historico",l:"Historial"},
+          {k:"reconciliar",l:"🔄 Reconciliar"},
         ].map(t=>(
           <button key={t.k} onClick={()=>setTab(t.k)}
             style={{
@@ -13062,6 +13063,267 @@ function AdminPagosSection({ adminUser, adminCfg }) {
           )}
         </>
       )}
+
+      {/* TAB RECONCILIAR — recalcular wallets desde los pedidos entregados */}
+      {tab === "reconciliar" && <ReconciliarWalletsTab/>}
+    </>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   ADMIN — TAB RECONCILIAR WALLETS
+   ─────────────────────────────────────────────────────────────────────────
+   Lista todos los vendedores y repartidores con sus saldos actuales y permite
+   recalcular el wallet desde cero a partir de los pedidos ENTREGADOS.
+   Útil para limpiar saldos inflados por el bug histórico de centavos/dólares.
+───────────────────────────────────────────────────────────────────────── */
+function ReconciliarWalletsTab() {
+  const [usuarios, setUsuarios] = useState([]);
+  const [billeterasViejas, setBilleterasViejas] = useState({});
+  const [walletsNuevos, setWalletsNuevos] = useState({});
+  const [pedidos, setPedidos] = useState([]);
+  const [adminCfg, setAdminCfg] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [recalculando, setRecalculando] = useState({});
+
+  const cargarTodo = async () => {
+    setLoading(true);
+    try {
+      // Usuarios
+      const usersRaw = await fbRead("users_db");
+      let usersList = [];
+      if (Array.isArray(usersRaw)) usersList = usersRaw;
+      else if (usersRaw && typeof usersRaw === "object") usersList = Object.values(usersRaw);
+      // Fallback: leer de localStorage si Firebase está vacío
+      if (usersList.length === 0) {
+        try {
+          const ls = await window.storage.get("users_db");
+          if (ls?.value) usersList = JSON.parse(ls.value);
+        } catch(e){}
+      }
+      const trabajadores = usersList.filter(u =>
+        u.rol === "vendedor" || u.rol === "repartidor"
+      );
+      setUsuarios(trabajadores);
+
+      // Billeteras viejas y wallets nuevos en paralelo
+      const oldRaw = await fbRead("billeteras");
+      const newRaw = await fbRead("wallets");
+      setBilleterasViejas(oldRaw || {});
+      setWalletsNuevos(newRaw || {});
+
+      // Pedidos
+      const ped = await fbRead("pedidos");
+      setPedidos(ped ? Object.values(ped) : []);
+
+      // Configuración (comisión)
+      const cfg = await fbRead("admin_cfg");
+      setAdminCfg(cfg || { commissionPctVendor: 2.5, serviceFeeUSD: 1.00 });
+    } catch(e) {
+      console.warn("ReconciliarWallets load:", e);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { cargarTodo(); }, []);
+
+  // Recalcular wallets de un usuario desde sus pedidos ENTREGADOS
+  const recalcular = async (u) => {
+    const id = u.id;
+    const rol = u.rol;
+    const misPedidos = pedidos.filter(p =>
+      p.status === "ENTREGADO" && (
+        rol === "repartidor" ? p.assignedRepartidorId === id : p.vendorId === id
+      )
+    );
+
+    if (!window.confirm(
+      `¿Recalcular billetera de ${u.nombre}?\n\n` +
+      `Se procesarán ${misPedidos.length} pedidos entregados.\n` +
+      `Los retiros ya pagados (cashouts) se conservan.\n\n` +
+      `Esta acción reemplaza el saldo actual.`
+    )) return;
+
+    setRecalculando(r => ({ ...r, [id]: true }));
+
+    try {
+      const commPct = adminCfg?.commissionPctVendor || 2.5;
+      const svcFee  = adminCfg?.serviceFeeUSD || 1.00;
+
+      let saldo = 0, ganado = 0, deudaApp = 0, efectivoMano = 0;
+      const historiaVieja = [];
+      const txNuevas = [];
+
+      for (const o of misPedidos) {
+        const lottery  = parseFloat(o.lotteryValue || 0);
+        const delivery = parseFloat(o.deliveryFee || 0);
+        const tip      = parseFloat(o.tip || 0);
+        const esEfectivo = (o.paymentMethod || "").toUpperCase() === "CASH";
+        const fechaMs  = o.deliveredAt || o.createdAtMs || Date.now();
+
+        if (rol === "repartidor") {
+          const ganancia = +(delivery + tip).toFixed(2);
+          const comm     = +(lottery * commPct / 100).toFixed(2);
+          const deuda    = esEfectivo ? +(comm + svcFee).toFixed(2) : 0;
+          const efRecibido = esEfectivo ? +(lottery + svcFee + delivery + tip).toFixed(2) : 0;
+
+          saldo        += ganancia;
+          ganado       += ganancia;
+          deudaApp     += deuda;
+          efectivoMano += efRecibido;
+
+          historiaVieja.push({
+            id: `recon-${o.id}`,
+            ts: new Date(fechaMs).toLocaleString("es-PA"),
+            desc: `Entrega ${o.id} · ${esEfectivo ? "Efectivo" : "Yappy"}`,
+            monto: ganancia,
+            tipo: "entrega",
+          });
+          txNuevas.push({
+            id: `recon-${o.id}`,
+            fecha: new Date(fechaMs).toISOString(),
+            tipo: "DELIVERY", monto: ganancia,
+            descripcion: `Delivery completado · Pedido #${(o.id||"").slice(-6)}`,
+            refId: o.id, direccion: "CREDITO",
+          });
+        } else if (rol === "vendedor") {
+          // Vendedor recibe lottery - comisión 2.5%
+          const venta = +(lottery * (1 - commPct/100)).toFixed(2);
+          saldo  += venta;
+          ganado += venta;
+          historiaVieja.push({
+            id: `recon-${o.id}`,
+            ts: new Date(fechaMs).toLocaleString("es-PA"),
+            desc: `Venta ${o.id}`,
+            monto: venta, tipo: "venta",
+          });
+          txNuevas.push({
+            id: `recon-${o.id}`,
+            fecha: new Date(fechaMs).toISOString(),
+            tipo: "VENTA", monto: venta,
+            descripcion: `Venta entregada · Pedido #${(o.id||"").slice(-6)}`,
+            refId: o.id, direccion: "CREDITO",
+          });
+        }
+      }
+
+      // Preservar retiros ya pagados del wallet nuevo
+      const walletNuevoActual = walletsNuevos[id] || {};
+      const totalRetirado = walletNuevoActual.totalRetirado || 0;
+      // Conservar transacciones tipo RETIRO
+      const txRetiros = (walletNuevoActual.transacciones || [])
+        .filter(tx => tx.tipo === "RETIRO" || tx.direccion === "DEBITO");
+
+      const balanceFinal = +(saldo - totalRetirado).toFixed(2);
+      const totalSaldo   = +Math.max(0, balanceFinal).toFixed(2);
+
+      // 1) Sobrescribir billetera vieja (sistema del repartidor)
+      if (rol === "repartidor") {
+        await fbWrite(`billeteras/${id}`, {
+          saldo: totalSaldo,
+          ganado: +ganado.toFixed(2),
+          entregas: misPedidos.length,
+          deudaApp: +deudaApp.toFixed(2),
+          efectivoMano: +efectivoMano.toFixed(2),
+          historia: historiaVieja.slice(-50),
+          actualizadoEl: new Date().toLocaleString("es-PA"),
+          reconciliadoEn: Date.now(),
+        });
+      }
+
+      // 2) Sobrescribir wallet nuevo (sistema de cashouts)
+      await fbWrite(`wallets/${id}`, {
+        balance: totalSaldo,
+        totalGanado: +ganado.toFixed(2),
+        totalRetirado: +totalRetirado.toFixed(2),
+        transacciones: [...txNuevas, ...txRetiros]
+          .sort((a,b) => new Date(b.fecha) - new Date(a.fecha))
+          .slice(0, 100),
+        actualizadoEn: Date.now(),
+        reconciliadoEn: Date.now(),
+      });
+
+      toast(`✅ ${u.nombre} reconciliado · ${misPedidos.length} entregas · Balance $${totalSaldo.toFixed(2)}`);
+      await cargarTodo();
+    } catch (e) {
+      console.error(e);
+      toast(`❌ Error: ${e.message}`);
+    }
+    setRecalculando(r => ({ ...r, [id]: false }));
+  };
+
+  const recalcularTodos = async () => {
+    if (!window.confirm(
+      `¿Recalcular billeteras de TODOS los usuarios (${usuarios.length})?\n\n` +
+      `Esto puede tardar varios segundos. Los retiros ya pagados se conservan.`
+    )) return;
+    for (const u of usuarios) {
+      await recalcular(u);
+    }
+  };
+
+  if (loading) return <div style={{padding:30,textAlign:"center",color:"var(--muted)"}}>Cargando datos…</div>;
+
+  return (
+    <>
+      <div style={{fontSize:11,color:"var(--muted)",marginBottom:10,lineHeight:1.5,padding:"10px 12px",background:"rgba(244,196,48,.06)",border:"1px solid rgba(244,196,48,.22)",borderRadius:9}}>
+        🔄 <strong style={{color:"var(--gold)"}}>Recalcular billeteras</strong> desde los pedidos ENTREGADOS. Útil para corregir saldos inflados por bugs previos. Los retiros (cashouts) ya pagados se conservan.
+      </div>
+
+      {usuarios.length > 1 && (
+        <button onClick={recalcularTodos}
+          style={{width:"100%",padding:"11px",background:"linear-gradient(135deg,#A78BFA,#8B5CF6)",border:"none",color:"#fff",borderRadius:10,fontSize:12,fontWeight:800,cursor:"pointer",marginBottom:14,fontFamily:"'DM Sans',sans-serif"}}>
+          🔄 Recalcular TODOS ({usuarios.length} usuarios)
+        </button>
+      )}
+
+      {usuarios.length === 0 ? (
+        <div className="admin-card" style={{textAlign:"center",padding:"20px"}}>
+          <div style={{fontSize:32,marginBottom:5}}>👥</div>
+          <div style={{fontSize:11,color:"var(--muted)"}}>No hay vendedores ni repartidores registrados</div>
+        </div>
+      ) : usuarios.map(u => {
+        const old = billeterasViejas[u.id] || {};
+        const nuevo = walletsNuevos[u.id] || {};
+        const misPedidos = pedidos.filter(p =>
+          p.status === "ENTREGADO" && (
+            u.rol === "repartidor" ? p.assignedRepartidorId === u.id : p.vendorId === u.id
+          )
+        );
+        const rolColor = u.rol === "vendedor" ? "#FFCC33" : "#4DB5FF";
+        const rolIc    = u.rol === "vendedor" ? "🏪" : "🛵";
+        const esRecalculando = recalculando[u.id];
+
+        return (
+          <div key={u.id} className="admin-card" style={{marginBottom:10,borderLeft:`3px solid ${rolColor}`}}>
+            <div className="row" style={{justifyContent:"space-between",marginBottom:8}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:800,color:"var(--text)"}}>{rolIc} {u.nombre}</div>
+                <div style={{fontSize:10,color:"var(--muted)"}}>{u.rol} · {misPedidos.length} entrega{misPedidos.length!==1?'s':''} en histórico</div>
+              </div>
+            </div>
+
+            {/* Comparación saldos */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:9}}>
+              <div style={{background:"var(--bg3)",borderRadius:7,padding:"7px 9px"}}>
+                <div style={{fontSize:9,color:"var(--muted)",fontWeight:700}}>BILLETERA ACTUAL</div>
+                <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--gold)"}}>${(old.saldo || 0).toFixed(2)}</div>
+                <div style={{fontSize:9,color:"var(--muted)"}}>{old.entregas || 0} entregas</div>
+              </div>
+              <div style={{background:"var(--bg3)",borderRadius:7,padding:"7px 9px"}}>
+                <div style={{fontSize:9,color:"var(--muted)",fontWeight:700}}>WALLET (CASHOUTS)</div>
+                <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--green)"}}>${(nuevo.balance || 0).toFixed(2)}</div>
+                <div style={{fontSize:9,color:"var(--muted)"}}>retirado: ${(nuevo.totalRetirado || 0).toFixed(2)}</div>
+              </div>
+            </div>
+
+            <button onClick={()=>recalcular(u)} disabled={esRecalculando}
+              style={{width:"100%",padding:"9px",background: esRecalculando ? "var(--bg3)" : "rgba(167,139,250,.15)",border:"1px solid rgba(167,139,250,.4)",color: esRecalculando ? "var(--muted)" : "#A78BFA",borderRadius:8,fontSize:11,fontWeight:800,cursor: esRecalculando ? "default" : "pointer",fontFamily:"'DM Sans',sans-serif"}}>
+              {esRecalculando ? "Reconciliando…" : `🔄 Recalcular desde ${misPedidos.length} pedido${misPedidos.length!==1?'s':''}`}
+            </button>
+          </div>
+        );
+      })}
     </>
   );
 }
