@@ -3593,8 +3593,10 @@ function HistorialScreen({ nav, orders=[], onClientApprove, onClientReject, onPr
               </div>
             )}
 
-            {/* BOTÓN CANCELAR — solo para pedidos activos que aún no fueron entregados */}
-            {isActive && !isModified && !isReplSent && onClientCancel && (
+            {/* BOTÓN CANCELAR — solo cuando el vendedor AÚN NO ha aprobado el pedido.
+                Una vez aprobado (status: APROBADO o EN_CAMINO), el comprador no puede
+                cancelar; tendría que coordinar con el vendedor o repartidor. */}
+            {o.status?.toUpperCase()==="PENDIENTE" && !isModified && !isReplSent && onClientCancel && (
               <button onClick={()=>{
                 const verif = onVerifyCancel ? onVerifyCancel(o) : { puedeCancelar: true };
                 if (!verif.puedeCancelar) { window.alert(verif.motivo); return; }
