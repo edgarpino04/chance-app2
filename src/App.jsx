@@ -9249,9 +9249,11 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
     if (approvedOrders.length < 1) return null;
     // Para go-live, si hay al menos 1 pedido aprobado lo mostramos como batch
     const batchOrders = approvedOrders.slice(0, BATCH.MAX_ORDERS);
+    // NOTA: las propiedades _driver, _appSvc, _appComm de calcOrderTotals
+    // están en CENTAVOS. Hay que dividir entre 100 para mostrar en dólares.
     const totalEarnings = batchOrders.reduce((sum, o) => {
       const et = calcOrderTotals(o.lotteryValue||"1.00", o.deliveryFee||"2.50", o.tip||"0");
-      return sum + (parseFloat(et._driver) || 0);
+      return sum + ((et._driver || 0) / 100);
     }, 0);
     const cashOrders  = batchOrders.filter(o => o.paymentMethod === "CASH").length;
     const yappyOrders = batchOrders.filter(o => o.paymentMethod !== "CASH").length;
@@ -9262,17 +9264,17 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
       riderTotalPayout: totalEarnings.toFixed(2),
       cashSummary: {
         cashOrders, yappyOrders,
-        totalRiderCashDebt: batchOrders
+        totalRiderCashDebt: (batchOrders
           .filter(o => o.paymentMethod === "CASH")
           .reduce((s, o) => {
             const et = calcOrderTotals(o.lotteryValue||"1.00", o.deliveryFee||"2.50", o.tip||"0");
-            return s + (parseFloat(et._appSvc||0) + parseFloat(et._appComm||0));
-          }, 0).toFixed(2),
+            return s + ((et._appSvc||0) + (et._appComm||0));
+          }, 0) / 100).toFixed(2),
       },
       rows: batchOrders.map(o => {
         const et = calcOrderTotals(o.lotteryValue||"1.00", o.deliveryFee||"2.50", o.tip||"0");
         return {
-          v: `$${parseFloat(et._driver||0).toFixed(2)}`,
+          v: `$${((et._driver||0) / 100).toFixed(2)}`,
           l: `${o.id} · ${o.vendor || "Vendedor"} → ${o.deliveryAddr || "Cliente"}`,
           bold: false,
         };
@@ -9314,6 +9316,46 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
     return () => { active = false; clearInterval(t); };
   }, [repartidorUserId]);
 
+  // ──────────────────────────────────────────────────────────────────────
+  // RECONCILIACIÓN AUTOMÁTICA DEL WALLET
+  // Cuando el wallet se carga, comparamos los pedidos ENTREGADOS con los
+  // que ya están reflejados en wallet.historia. Si hay entregas no
+  // contabilizadas (por crash de app, recarga mid-entrega, o bug histórico),
+  // las añadimos al saldo automáticamente.
+  // ──────────────────────────────────────────────────────────────────────
+  const reconciliarHechoRef = useRef(false);
+  useEffect(() => {
+    if (!walletLoaded || reconciliarHechoRef.current) return;
+    const delivered = (orders || []).filter(o =>
+      o.status === "ENTREGADO" &&
+      (o.assignedRepartidorId === repartidorUserId || !o.assignedRepartidorId)
+    );
+    if (delivered.length === 0) return;
+
+    // IDs ya registrados en el historial del wallet (extraídos de "Entrega CH-XXXX · ...")
+    const idsRegistrados = new Set(
+      (wallet.historia || [])
+        .filter(h => h.tipo === "entrega")
+        .map(h => {
+          const m = (h.desc || "").match(/Entrega\s+([A-Z0-9-]+)/i);
+          return m ? m[1] : null;
+        })
+        .filter(Boolean)
+    );
+
+    const faltantes = delivered.filter(o => !idsRegistrados.has(o.id));
+    if (faltantes.length === 0) return;
+
+    reconciliarHechoRef.current = true;
+    (async () => {
+      console.log(`[Wallet] Reconciliando ${faltantes.length} entrega(s) no contabilizadas`);
+      for (const order of faltantes) {
+        await registrarEntrega(order);
+      }
+      toast(`✅ Billetera reconciliada · ${faltantes.length} entrega${faltantes.length>1?'s':''} acreditada${faltantes.length>1?'s':''}`);
+    })();
+  }, [walletLoaded, orders]);
+
   // Guardar billetera — SIEMPRE lee Firebase antes de escribir para evitar
   // sobreescribir con estado stale del closure (causa del bug $50 → $500)
   const saveWallet = async (patch) => {
@@ -9352,9 +9394,11 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
   const registrarEntrega = async (order) => {
     const et = calcOrderTotals(order.lotteryValue||"1.00", order.deliveryFee||"2.50", order.tip||"0");
     const esEfectivo = order.paymentMethod === "CASH";
-    const ganancia   = parseFloat(et._driver) || 0;
-    const deuda      = esEfectivo ? (parseFloat(et._appSvc||0) + parseFloat(et._appComm||0)) : 0;
-    const efectivo   = esEfectivo ? parseFloat(et._customerTotal||0) : 0;
+    // IMPORTANTE: _driver, _appSvc, _appComm, _customerTotal están en CENTAVOS.
+    // El wallet guarda valores en DÓLARES, así que dividimos entre 100.
+    const ganancia   = (et._driver || 0) / 100;
+    const deuda      = esEfectivo ? ((et._appSvc||0) + (et._appComm||0)) / 100 : 0;
+    const efectivo   = esEfectivo ? (et._customerTotal||0) / 100 : 0;
     // Leer base fresca de Firebase antes de sumar
     let base = walletRef.current;
     try {
@@ -9362,11 +9406,11 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
       if (fbData && typeof fbData === "object") base = { ...WALLET_INITIAL, ...fbData };
     } catch(e) {}
     let next = {
-      saldo:        base.saldo + ganancia,
-      ganado:       base.ganado + ganancia,
+      saldo:        +(base.saldo + ganancia).toFixed(2),
+      ganado:       +(base.ganado + ganancia).toFixed(2),
       entregas:     base.entregas + 1,
-      deudaApp:     base.deudaApp + deuda,
-      efectivoMano: base.efectivoMano + efectivo,
+      deudaApp:     +(base.deudaApp + deuda).toFixed(2),
+      efectivoMano: +(base.efectivoMano + efectivo).toFixed(2),
     };
     next = addTx({ ...base, ...next }, `Entrega ${order.id} · ${esEfectivo ? "Efectivo" : "Yappy"}`, ganancia, "entrega");
     await saveWallet(next);
@@ -9886,7 +9930,7 @@ function RepartidorHome({ authUser=null, orders=[], onAssign, onDeliver, onStart
                       <div style={{fontSize:10,color:"var(--muted)"}}>📍 {o.vendorZone||"Zona"} {dp!=null&&`· ${dist}`}</div>
                     </div>
                     <div style={{textAlign:"right"}}>
-                      <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--green)",letterSpacing:1}}>${parseFloat(et._driver||0).toFixed(2)}</div>
+                      <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:"var(--green)",letterSpacing:1}}>${((et._driver||0)/100).toFixed(2)}</div>
                       <div style={{fontSize:9,color:"var(--muted)"}}>{o.paymentMethod==="CASH"?"💵 Efectivo":"📱 Yappy"}</div>
                     </div>
                   </div>
