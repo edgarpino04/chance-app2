@@ -18,6 +18,10 @@ const FIREBASE_CONFIG = {
 const FB_DB_URL = FIREBASE_CONFIG.databaseURL;
 
 // ─── API REST de Firebase Realtime DB (sin SDK, más liviano) ───
+// Estado global del último error de Firebase, para diagnóstico en UI
+window.__FB_LAST_ERROR = null;
+window.__FB_LAST_OK_TS = null;
+
 const fbWrite = async (path, data) => {
   try {
     const r = await fetch(`${FB_DB_URL}/${path}.json`, {
@@ -25,15 +29,39 @@ const fbWrite = async (path, data) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data)
     });
+    if (r.ok) {
+      window.__FB_LAST_OK_TS = Date.now();
+      window.__FB_LAST_ERROR = null;
+    } else {
+      const text = await r.text().catch(()=>r.statusText);
+      window.__FB_LAST_ERROR = `WRITE ${path}: HTTP ${r.status} ${text.slice(0,120)}`;
+      console.warn("FB write error:", window.__FB_LAST_ERROR);
+    }
     return r.ok;
-  } catch (e) { console.warn("FB write error:", e.message); return false; }
+  } catch (e) {
+    window.__FB_LAST_ERROR = `WRITE ${path}: ${e.message}`;
+    console.warn("FB write error:", e.message);
+    return false;
+  }
 };
 
 const fbRead = async (path) => {
   try {
     const r = await fetch(`${FB_DB_URL}/${path}.json`);
-    return r.ok ? await r.json() : null;
-  } catch (e) { return null; }
+    if (r.ok) {
+      window.__FB_LAST_OK_TS = Date.now();
+      window.__FB_LAST_ERROR = null;
+      return await r.json();
+    } else {
+      const text = await r.text().catch(()=>r.statusText);
+      window.__FB_LAST_ERROR = `READ ${path}: HTTP ${r.status} ${text.slice(0,120)}`;
+      console.warn("FB read error:", window.__FB_LAST_ERROR);
+      return null;
+    }
+  } catch (e) {
+    window.__FB_LAST_ERROR = `READ ${path}: ${e.message}`;
+    return null;
+  }
 };
 
 const fbUpdate = async (path, data) => {
@@ -2541,15 +2569,33 @@ function CheckoutScreen({ cart, setCart, nav, onConfirm }) {
 
   // Datos de cobro de la empresa (Yappy + Banco) leídos del admin_cfg.
   // Se usan al confirmar el pago Yappy para mostrar a quién enviar el dinero.
+  // ─────────────────────────────────────────────────────────────────────────
+  // ROBUSTEZ: leemos PRIMERO de Firebase (fuente canónica multi-dispositivo)
+  // y si falla, caemos a localStorage (donde useStorage del admin lo guarda).
+  // También refrescamos al cambiar de paso para captar cambios recientes.
   const [cuentaEmpresa, setCuentaEmpresa] = useState(null);
   useEffect(() => {
-    (async () => {
+    let cancel = false;
+    const cargarConfig = async () => {
+      let cfg = null;
+      // 1) Intentar Firebase
       try {
-        const cfg = await fbRead("admin_cfg");
-        if (cfg?.cuentaEmpresa) setCuentaEmpresa(cfg.cuentaEmpresa);
-      } catch(e){}
-    })();
-  }, []);
+        cfg = await fbRead("admin_cfg");
+      } catch(e) {}
+      // 2) Fallback: localStorage (donde el admin guarda primero)
+      if (!cfg?.cuentaEmpresa) {
+        try {
+          const r = await window.storage.get("admin_cfg");
+          if (r?.value) cfg = JSON.parse(r.value);
+        } catch(e){}
+      }
+      if (!cancel && cfg?.cuentaEmpresa) setCuentaEmpresa(cfg.cuentaEmpresa);
+    };
+    cargarConfig();
+    // Refrescar cada 5s para captar cambios del admin en tiempo real
+    const t = setInterval(cargarConfig, 5000);
+    return () => { cancel = true; clearInterval(t); };
+  }, [step]); // re-ejecuta al cambiar de paso del checkout
 
   // ─── GPS REAL DEL VENDEDOR para cálculo correcto del delivery fee ─────────
   // El error de "14.9 km Zona lejana" para Israel venía de usar getVendorCoords
@@ -10467,6 +10513,8 @@ function PerfilScreen({ authUser=null, onLogout=null, currentRole=null, onSwitch
   const [switchedToComprador, setSwitchedToComprador] = useState(currentRole==="cliente");
   const [showWallet, setShowWallet] = useState(false);
   const [walletBalance, setWalletBalance] = useState(null);
+  const [editTelOpen, setEditTelOpen] = useState(false);
+  const [editTelValue, setEditTelValue] = useState("");
 
   // Initials from name
   const initials = authUser?.nombre
@@ -10606,7 +10654,53 @@ function PerfilScreen({ authUser=null, onLogout=null, currentRole=null, onSwitch
       {/* ── INFO DEL USUARIO ── */}
       {authUser&&(
         <div className="card" style={{marginBottom:12}}>
-          <div className="sec" style={{marginBottom:10}}>Información personal</div>
+          <div className="row" style={{justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div className="sec" style={{margin:0}}>Información personal</div>
+            <button onClick={()=>setEditTelOpen(v=>!v)}
+              style={{background:editTelOpen?"var(--red)":"var(--gold)",border:"none",color:"#08111F",padding:"5px 11px",borderRadius:7,fontSize:10,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+              {editTelOpen ? "Cancelar" : "✏️ Editar tel."}
+            </button>
+          </div>
+
+          {editTelOpen && (
+            <div style={{background:"var(--bg3)",borderRadius:10,padding:"11px 13px",marginBottom:10}}>
+              <div style={{fontSize:10,color:"var(--muted)",fontWeight:700,marginBottom:5}}>NUEVO TELÉFONO (8 DÍGITOS)</div>
+              <div style={{display:"flex",gap:7,marginBottom:8}}>
+                <div style={{padding:"9px 11px",background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:8,color:"var(--muted)",fontSize:12,fontWeight:700}}>+507</div>
+                <input value={editTelValue} onChange={e=>setEditTelValue(e.target.value.replace(/\D/g,"").slice(0,8))}
+                  placeholder="6XXX-XXXX" inputMode="numeric"
+                  style={{flex:1,background:"var(--bg2)",border:"1px solid var(--border)",borderRadius:8,padding:"9px 11px",color:"var(--text)",fontSize:13,fontFamily:"'DM Sans'",letterSpacing:1}}/>
+              </div>
+              <button onClick={async()=>{
+                if (editTelValue.length !== 8) { toast("⚠️ El teléfono debe tener 8 dígitos"); return; }
+                const updated = { ...authUser, telefono: editTelValue };
+                try {
+                  // 1. Actualizar localStorage
+                  const r = await window.storage.get("users_db");
+                  let users = [];
+                  if (r?.value) {
+                    const parsed = JSON.parse(r.value);
+                    users = Array.isArray(parsed) ? parsed : Object.values(parsed);
+                  }
+                  const idx = users.findIndex(u => u?.id === authUser.id);
+                  if (idx >= 0) users[idx] = { ...users[idx], telefono: editTelValue };
+                  else users.push(updated);
+                  await window.storage.set("users_db", JSON.stringify(users));
+                  // 2. Actualizar Firebase por path individual
+                  try { await fbWrite(`users/${authUser.id}`, { ...updated, photoIdData:null, photoBillData:null, photoLicData:null }); } catch(e){}
+                  // 3. Actualizar sesión activa
+                  try { await window.storage.set("active_session", JSON.stringify({ userId: authUser.id, ts: Date.now() })); } catch(e){}
+                  toast(`✅ Teléfono actualizado: ${editTelValue.slice(0,4)}-${editTelValue.slice(4)}`);
+                  setEditTelOpen(false);
+                  setEditTelValue("");
+                  setTimeout(()=>window.location.reload(), 800);
+                } catch(e) { toast("❌ Error al guardar: " + e.message); }
+              }} style={{width:"100%",background:"linear-gradient(135deg,#00D68F,#10B981)",border:"none",color:"#fff",padding:"9px",borderRadius:8,fontSize:12,fontWeight:800,cursor:"pointer"}}>
+                ✓ Guardar nuevo teléfono
+              </button>
+            </div>
+          )}
+
           {[
             {ic:"user",  l:"Cédula",    v:authUser.cedula||"—"},
             {ic:"phone", l:"Teléfono",  v:authUser.telefono||"—"},
@@ -12005,11 +12099,90 @@ async function registrarPagoManual({ adminId, destinatarioId, destinatarioRol, m
    PANTALLA DE INICIO DE SESIÓN
 ───────────────────────────────────────────────────────────────────────── */
 function LoginScreen({ onLogin, onGoRegister, registerSuccess=null }) {
-  const [email, setEmail]   = useState(registerSuccess?.email||"");
+  const [loginMode, setLoginMode] = useState("email");  // "email" | "telefono"
+  const [identifier, setIdentifier] = useState(registerSuccess?.email||"");
   const [pass,  setPass]    = useState("");
   const [err,   setErr]     = useState("");
   const [loading, setLoading] = useState(false);
   const [showPass, setShowPass] = useState(false);
+  // Diagnóstico: lista de cuentas mostradas al usuario cuando el login falla
+  const [diagCuentas, setDiagCuentas] = useState(null);
+  const [diagInfo, setDiagInfo]       = useState(null);
+
+  // Aliases para compatibilidad con código existente
+  const email = identifier;
+  const setEmail = setIdentifier;
+
+  // Normaliza un teléfono panameño a "########" (8 dígitos sin guiones/espacios/+507)
+  const normalizeTel = (raw) => {
+    if (!raw) return "";
+    let d = String(raw).replace(/\D/g, "");
+    // Quitar prefijo +507 / 507 si lo tiene
+    if (d.startsWith("507") && d.length === 11) d = d.slice(3);
+    // Tomar los últimos 8 dígitos si quedaron más (por error de tipeo)
+    if (d.length > 8) d = d.slice(-8);
+    return d;
+  };
+
+  // Mostrar todas las cuentas registradas (para diagnóstico de teléfono no encontrado)
+  const buscarMiCuenta = async () => {
+    const fuentes = [];
+    const diagInfo = {
+      fbStatus: "desconocido",
+      fbError: null,
+      fbUsers: 0,
+      fbPendientes: 0,
+      localUsers: 0,
+    };
+    // 1. localStorage
+    try {
+      const r = await window.storage.get("users_db");
+      if (r?.value) {
+        const arr = JSON.parse(r.value);
+        const norm = Array.isArray(arr) ? arr : Object.values(arr);
+        diagInfo.localUsers = norm.length;
+        for (const u of norm) if (u?.email) fuentes.push({...u, _fuente:"local"});
+      }
+    } catch(e){}
+    // 2. Firebase users — TEST EXPLÍCITO de conectividad
+    try {
+      const probeR = await fetch(`${FB_DB_URL}/users.json`);
+      if (probeR.ok) {
+        const fb = await probeR.json();
+        const arr = Array.isArray(fb) ? fb : (fb && typeof fb === "object" ? Object.values(fb) : []);
+        diagInfo.fbUsers = arr.length;
+        diagInfo.fbStatus = "OK";
+        for (const u of arr) {
+          if (u?.email && !fuentes.find(f => f.email?.toLowerCase()===u.email.toLowerCase())) {
+            fuentes.push({...u, _fuente:"firebase"});
+          }
+        }
+      } else {
+        diagInfo.fbStatus = "ERROR";
+        const txt = await probeR.text().catch(()=>"");
+        diagInfo.fbError = `HTTP ${probeR.status}: ${txt.slice(0,200)}`;
+      }
+    } catch(e) {
+      diagInfo.fbStatus = "SIN CONEXIÓN";
+      diagInfo.fbError = e.message;
+    }
+    // 3. Firebase users_pendientes
+    try {
+      const probeR = await fetch(`${FB_DB_URL}/users_pendientes.json`);
+      if (probeR.ok) {
+        const pend = await probeR.json();
+        const arr = Array.isArray(pend) ? pend : (pend && typeof pend === "object" ? Object.values(pend) : []);
+        diagInfo.fbPendientes = arr.length;
+        for (const u of arr) {
+          if (u?.email && !fuentes.find(f => f.email?.toLowerCase()===u.email.toLowerCase())) {
+            fuentes.push({...u, _fuente:"pendiente"});
+          }
+        }
+      }
+    } catch(e){}
+    setDiagCuentas(fuentes);
+    setDiagInfo(diagInfo);
+  };
 
   // Demo users hardcoded as fallback — always work even if storage isn't seeded
   const DEMO_USERS = [
@@ -12020,14 +12193,41 @@ function LoginScreen({ onLogin, onGoRegister, registerSuccess=null }) {
   ];
 
   const handleLogin = async () => {
-    if (!email.trim() || !pass.trim()) { setErr("Ingresa tu correo y contraseña."); return; }
+    if (!identifier.trim() || !pass.trim()) {
+      setErr(loginMode === "telefono" ? "Ingresa tu teléfono y contraseña." : "Ingresa tu correo y contraseña.");
+      return;
+    }
     setLoading(true); setErr("");
 
-    const emailLow = email.toLowerCase().trim();
+    // Normalizar el identificador según el modo
+    const esTelefono = loginMode === "telefono";
+    const idNorm = esTelefono ? normalizeTel(identifier) : identifier.toLowerCase().trim();
+    if (esTelefono && idNorm.length !== 8) {
+      setErr("El teléfono debe tener 8 dígitos.");
+      setLoading(false); return;
+    }
+    // emailLow se mantiene para compatibilidad con el código que sigue
+    const emailLow = idNorm;
+
+    // Helper de matching: compara por email o por teléfono según el modo
+    const matchUser = (u) => {
+      if (!u || typeof u !== "object") return false;
+      if (esTelefono) {
+        // Tolerante: normaliza el campo del usuario y compara los últimos 8 dígitos
+        // (cubre casos donde el telefono se guardó con prefijo, espacios, o variaciones)
+        const tUser = normalizeTel(u.telefono);
+        if (!tUser) return false;
+        const matchTel = tUser === idNorm || tUser.slice(-8) === idNorm.slice(-8);
+        return matchTel && u.password === pass;
+      } else {
+        const e = (u.email || "").toLowerCase().trim();
+        return e === idNorm && u.password === pass;
+      }
+    };
 
     // 1. Demos hardcodeados (siempre funciona)
     try {
-      const demo = DEMO_USERS.find(u => u.email === emailLow && u.password === pass);
+      const demo = DEMO_USERS.find(matchUser);
       if (demo) { onLogin(demo); setLoading(false); return; }
     } catch(e) { console.warn("demo check failed:", e); }
 
@@ -12047,11 +12247,7 @@ function LoginScreen({ onLogin, onGoRegister, registerSuccess=null }) {
     // 3. Buscar match en local
     let user = null;
     try {
-      user = users.find(u => {
-        if (!u || typeof u !== "object") return false;
-        const e = (u.email || "").toLowerCase().trim();
-        return e === emailLow && u.password === pass;
-      });
+      user = users.find(matchUser);
     } catch(e) { console.warn("local find failed:", e); }
 
     // 4. Si no está local, busca en Firebase
@@ -12062,20 +12258,28 @@ function LoginScreen({ onLogin, onGoRegister, registerSuccess=null }) {
           fbUsers = Object.values(fbUsers);
         }
         if (Array.isArray(fbUsers)) {
-          user = fbUsers.find(u => {
-            if (!u || typeof u !== "object") return false;
-            const e = (u.email || "").toLowerCase().trim();
-            return e === emailLow && u.password === pass;
-          });
+          user = fbUsers.find(matchUser);
           // Sincronizar al storage local
           if (user) {
             try {
-              users = [...users.filter(u => (u?.email || "").toLowerCase().trim() !== emailLow), user];
+              const userEmailLow = (user.email || "").toLowerCase().trim();
+              users = [...users.filter(u => (u?.email || "").toLowerCase().trim() !== userEmailLow), user];
               await window.storage.set("users_db", JSON.stringify(users));
             } catch(syncErr) { console.warn("sync failed:", syncErr); }
           }
         }
       } catch(fbErr) { console.warn("FB lookup failed:", fbErr); }
+
+      // 4b. Backup: también buscar en users_pendientes (registros que aún no fueron sincronizados al nodo users)
+      if (!user) {
+        try {
+          const pend = await fbRead("users_pendientes");
+          if (pend && typeof pend === "object") {
+            const pendArr = Array.isArray(pend) ? pend : Object.values(pend);
+            user = pendArr.find(matchUser);
+          }
+        } catch(e) {}
+      }
     }
 
     // 5. Resolver
@@ -12097,25 +12301,77 @@ function LoginScreen({ onLogin, onGoRegister, registerSuccess=null }) {
     }
 
     // 6. Diagnóstico
-    let userByEmail = null;
+    let userByIdentifier = null;
+    let todosLosUsuarios = [];  // para diagnóstico extendido
     try {
-      userByEmail = users.find(u => u?.email && u.email.toLowerCase().trim() === emailLow);
+      userByIdentifier = users.find(u => {
+        if (!u) return false;
+        return esTelefono ? normalizeTel(u.telefono) === idNorm
+                          : (u.email||"").toLowerCase().trim() === idNorm;
+      });
+      todosLosUsuarios = [...users];
       // También checa Firebase para diagnóstico
-      if (!userByEmail) {
+      if (!userByIdentifier) {
         let fbUsers = await fbRead("users");
         if (fbUsers && !Array.isArray(fbUsers) && typeof fbUsers === "object") {
           fbUsers = Object.values(fbUsers);
         }
         if (Array.isArray(fbUsers)) {
-          userByEmail = fbUsers.find(u => u?.email && u.email.toLowerCase().trim() === emailLow);
+          // Agregar al pool para diagnóstico
+          for (const u of fbUsers) {
+            if (u?.email && !todosLosUsuarios.find(x => x?.email?.toLowerCase() === u.email.toLowerCase())) {
+              todosLosUsuarios.push(u);
+            }
+          }
+          userByIdentifier = fbUsers.find(u => {
+            if (!u) return false;
+            return esTelefono ? normalizeTel(u.telefono) === idNorm
+                              : (u.email||"").toLowerCase().trim() === idNorm;
+          });
+        }
+        // También en users_pendientes
+        if (!userByIdentifier) {
+          try {
+            const pend = await fbRead("users_pendientes");
+            if (pend && typeof pend === "object") {
+              const pendArr = Array.isArray(pend) ? pend : Object.values(pend);
+              for (const u of pendArr) {
+                if (u?.email && !todosLosUsuarios.find(x => x?.email?.toLowerCase() === u.email.toLowerCase())) {
+                  todosLosUsuarios.push(u);
+                }
+              }
+              userByIdentifier = pendArr.find(u => {
+                if (!u) return false;
+                return esTelefono ? normalizeTel(u.telefono) === idNorm
+                                  : (u.email||"").toLowerCase().trim() === idNorm;
+              });
+            }
+          } catch(e) {}
         }
       }
     } catch(e) { console.warn("diag failed:", e); }
 
-    if (userByEmail) {
-      setErr(`Contraseña incorrecta para ${emailLow}. Verifica e intenta de nuevo.`);
+    const idLabel = esTelefono ? `el teléfono ${idNorm.slice(0,4)}-${idNorm.slice(4)}` : `"${idNorm}"`;
+    if (userByIdentifier) {
+      setErr(`Contraseña incorrecta. Verifica e intenta de nuevo.`);
+    } else if (esTelefono) {
+      // Para modo teléfono mostrar los teléfonos parecidos registrados para ayudar
+      const telsRegistrados = todosLosUsuarios
+        .map(u => ({ tel: normalizeTel(u?.telefono), nombre: u?.nombre, email: u?.email }))
+        .filter(x => x.tel && x.tel.length === 8);
+      console.log("[Login diag] Teléfonos registrados en este dispositivo:", telsRegistrados);
+      // Buscar coincidencia parcial (mismos primeros 4 dígitos)
+      const parecidos = telsRegistrados.filter(x => x.tel.slice(0,4) === idNorm.slice(0,4) || x.tel.slice(-4) === idNorm.slice(-4));
+      if (parecidos.length > 0) {
+        const lista = parecidos.slice(0,3).map(p => `${p.tel.slice(0,4)}-${p.tel.slice(4)} (${p.nombre||"sin nombre"})`).join(", ");
+        setErr(`No encontramos ${idLabel}. Sí están registrados: ${lista}. ¿Es tu cuenta con otro teléfono?`);
+      } else if (telsRegistrados.length === 0) {
+        setErr(`No encontramos ${idLabel}. Aún no hay usuarios con teléfono registrado en este dispositivo. Prueba iniciar con tu correo.`);
+      } else {
+        setErr(`No encontramos ${idLabel}. ¿Te registraste con otro número? Prueba iniciar con tu correo.`);
+      }
     } else {
-      setErr(`No encontramos una cuenta con "${emailLow}". ¿Te registraste correctamente?`);
+      setErr(`No encontramos una cuenta con ${idLabel}. ¿Te registraste correctamente?`);
     }
     setLoading(false);
   };
@@ -12154,11 +12410,49 @@ function LoginScreen({ onLogin, onGoRegister, registerSuccess=null }) {
             <div style={{fontSize:13,color:"#93ADCC",marginTop:6}}>Inicia sesión en tu cuenta</div>
           </div>
 
-          {/* Email */}
-          <label style={{display:"block",fontSize:11,fontWeight:800,color:"#9CB8D4",letterSpacing:1,textTransform:"uppercase",marginBottom:7}}>Correo electrónico</label>
-          <input type="email" placeholder="tu@correo.com" value={email}
-            onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()}
-            style={{display:"block",width:"100%",padding:"13px 15px",boxSizing:"border-box",background:"#243A58",border:"1.5px solid rgba(255,255,255,.15)",borderRadius:12,color:"#FFFFFF",fontSize:14,fontFamily:"'DM Sans',sans-serif",outline:"none",marginBottom:14}}/>
+          {/* Toggle Email / Teléfono */}
+          <div style={{display:"flex",background:"#1A2842",border:"1px solid rgba(255,255,255,.08)",borderRadius:12,padding:4,marginBottom:14}}>
+            {[
+              {k:"email",    l:"📧 Correo"},
+              {k:"telefono", l:"📱 Teléfono"},
+            ].map(opt => (
+              <button key={opt.k}
+                onClick={()=>{ setLoginMode(opt.k); setIdentifier(""); setErr(""); }}
+                style={{
+                  flex:1, padding:"9px 8px", borderRadius:9,
+                  background: loginMode===opt.k ? "linear-gradient(135deg,#FFCC33,#D4A218)" : "transparent",
+                  border:"none",
+                  color: loginMode===opt.k ? "#08101E" : "#9CB8D4",
+                  fontFamily:"'DM Sans',sans-serif",
+                  fontWeight: loginMode===opt.k ? 800 : 600,
+                  fontSize:12,
+                  cursor:"pointer",
+                  boxShadow: loginMode===opt.k ? "0 2px 8px rgba(255,204,51,.25)" : "none",
+                  transition:"all .2s",
+                }}>{opt.l}</button>
+            ))}
+          </div>
+
+          {/* Input dinámico según modo */}
+          <label style={{display:"block",fontSize:11,fontWeight:800,color:"#9CB8D4",letterSpacing:1,textTransform:"uppercase",marginBottom:7}}>
+            {loginMode==="telefono" ? "Número de teléfono" : "Correo electrónico"}
+          </label>
+          {loginMode === "telefono" ? (
+            <div style={{display:"flex",gap:8,marginBottom:14}}>
+              <div style={{padding:"13px 12px",background:"#1A2842",border:"1.5px solid rgba(255,255,255,.1)",borderRadius:12,color:"#9CB8D4",fontSize:14,fontFamily:"'DM Sans',sans-serif",display:"flex",alignItems:"center",gap:4}}>
+                <span style={{fontSize:18}}>🇵🇦</span>
+                <span style={{fontWeight:700}}>+507</span>
+              </div>
+              <input type="tel" placeholder="6XXX-XXXX" inputMode="numeric" value={identifier}
+                onChange={e=>setIdentifier(e.target.value.replace(/[^\d-]/g,"").slice(0,9))}
+                onKeyDown={e=>e.key==="Enter"&&handleLogin()}
+                style={{flex:1,display:"block",padding:"13px 15px",boxSizing:"border-box",background:"#243A58",border:"1.5px solid rgba(255,255,255,.15)",borderRadius:12,color:"#FFFFFF",fontSize:14,fontFamily:"'DM Sans',sans-serif",outline:"none",letterSpacing:1}}/>
+            </div>
+          ) : (
+            <input type="email" placeholder="tu@correo.com" value={identifier}
+              onChange={e=>setIdentifier(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()}
+              style={{display:"block",width:"100%",padding:"13px 15px",boxSizing:"border-box",background:"#243A58",border:"1.5px solid rgba(255,255,255,.15)",borderRadius:12,color:"#FFFFFF",fontSize:14,fontFamily:"'DM Sans',sans-serif",outline:"none",marginBottom:14}}/>
+          )}
 
           {/* Contraseña */}
           <label style={{display:"block",fontSize:11,fontWeight:800,color:"#9CB8D4",letterSpacing:1,textTransform:"uppercase",marginBottom:7}}>Contraseña</label>
@@ -12172,7 +12466,79 @@ function LoginScreen({ onLogin, onGoRegister, registerSuccess=null }) {
             </button>
           </div>
 
-          {err&&<div style={{background:"rgba(255,90,120,.12)",border:"1px solid rgba(255,90,120,.3)",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#FF8FAC",marginBottom:14,lineHeight:1.5}}>{err}</div>}
+          {err&&<div style={{background:"rgba(255,90,120,.12)",border:"1px solid rgba(255,90,120,.3)",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#FF8FAC",marginBottom:8,lineHeight:1.5}}>{err}</div>}
+
+          {/* Botón de diagnóstico: muestra todas las cuentas registradas */}
+          {err && !diagCuentas && (
+            <button onClick={buscarMiCuenta}
+              style={{display:"block",width:"100%",padding:"10px",borderRadius:10,border:"1px solid rgba(59,158,255,.35)",background:"rgba(59,158,255,.08)",color:"#3B9EFF",fontFamily:"'DM Sans',sans-serif",fontWeight:700,fontSize:12,cursor:"pointer",marginBottom:14}}>
+              🔍 Ver cuentas registradas en este dispositivo
+            </button>
+          )}
+
+          {/* Lista de cuentas diagnóstico */}
+          {diagCuentas && (
+            <div style={{background:"rgba(59,158,255,.06)",border:"1px solid rgba(59,158,255,.25)",borderRadius:11,padding:"12px",marginBottom:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}>
+                <div style={{fontSize:11,fontWeight:800,color:"#3B9EFF",letterSpacing:.5}}>📋 CUENTAS REGISTRADAS ({diagCuentas.length})</div>
+                <button onClick={()=>{setDiagCuentas(null);setDiagInfo(null);}} style={{background:"none",border:"none",color:"#9CB8D4",cursor:"pointer",fontSize:11,fontWeight:700}}>Cerrar</button>
+              </div>
+
+              {/* Estado de Firebase */}
+              {diagInfo && (
+                <div style={{
+                  background: diagInfo.fbStatus === "OK" ? "rgba(0,214,143,.08)" : "rgba(255,75,110,.08)",
+                  border: `1px solid ${diagInfo.fbStatus === "OK" ? "rgba(0,214,143,.3)" : "rgba(255,75,110,.3)"}`,
+                  borderRadius:9, padding:"9px 11px", marginBottom:10, fontSize:10, lineHeight:1.5
+                }}>
+                  <div style={{fontWeight:800, color: diagInfo.fbStatus === "OK" ? "#00D68F" : "#FF8FAC", marginBottom:3}}>
+                    Firebase: {diagInfo.fbStatus} {diagInfo.fbStatus === "OK" ? "✓" : "❌"}
+                  </div>
+                  <div style={{color:"#9CB8D4"}}>
+                    Local: {diagInfo.localUsers} cuentas · Firebase: {diagInfo.fbUsers} cuentas · Pendientes: {diagInfo.fbPendientes}
+                  </div>
+                  {diagInfo.fbError && (
+                    <div style={{color:"#FF8FAC", marginTop:5, wordBreak:"break-word", fontFamily:"monospace", fontSize:9}}>
+                      {diagInfo.fbError}
+                    </div>
+                  )}
+                  {diagInfo.fbStatus === "OK" && diagInfo.fbUsers === 0 && diagInfo.fbPendientes === 0 && (
+                    <div style={{color:"#FFCC33", marginTop:5}}>
+                      ⚠️ Firebase está vacío. Tu cuenta NO se está sincronizando. Las reglas de seguridad pueden estar bloqueando escrituras.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {diagCuentas.length === 0 ? (
+                <div style={{fontSize:11,color:"#9CB8D4",textAlign:"center",padding:"8px"}}>
+                  No hay ninguna cuenta registrada en este dispositivo aún.
+                </div>
+              ) : (
+                <div style={{maxHeight:220,overflowY:"auto"}}>
+                  {diagCuentas.map((u,i)=>{
+                    const tel = normalizeTel(u.telefono);
+                    const telFmt = tel.length === 8 ? `${tel.slice(0,4)}-${tel.slice(4)}` : (u.telefono || "sin teléfono");
+                    const rolIc = u.rol==="vendedor"?"🏪":u.rol==="repartidor"?"🛵":u.rol==="admin"?"👑":"🛒";
+                    return (
+                      <div key={i} style={{display:"flex",gap:9,padding:"7px 0",borderBottom: i<diagCuentas.length-1 ? "1px solid rgba(255,255,255,.06)" : "none"}}>
+                        <span style={{fontSize:18}}>{rolIc}</span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:12,fontWeight:700,color:"#FFFFFF"}}>{u.nombre || "(sin nombre)"}</div>
+                          <div style={{fontSize:10,color:"#9CB8D4",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.email}</div>
+                          <div style={{fontSize:10,color: tel.length===8 ? "#FFCC33" : "#FF8FAC",fontWeight:700}}>📱 {telFmt}</div>
+                        </div>
+                        <div style={{fontSize:9,color:"#9CB8D4",fontWeight:700,alignSelf:"flex-start",marginTop:2}}>{u._fuente}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <div style={{fontSize:10,color:"#9CB8D4",marginTop:9,paddingTop:9,borderTop:"1px solid rgba(255,255,255,.06)",lineHeight:1.5}}>
+                💡 Si tu cuenta aparece aquí pero el teléfono se ve raro, ese es el problema. Inicia con tu correo y actualiza tu teléfono desde el perfil.
+              </div>
+            </div>
+          )}
 
           <button onClick={handleLogin} disabled={loading}
             style={{display:"block",width:"100%",padding:"14px",borderRadius:13,border:"none",background:loading?"rgba(255,204,51,.5)":"linear-gradient(135deg,#FFCC33,#D4A218)",color:"#08101E",fontFamily:"'DM Sans',sans-serif",fontWeight:800,fontSize:15,cursor:loading?"default":"pointer",boxShadow:"0 4px 24px rgba(255,204,51,.35)"}}>
@@ -12392,25 +12758,55 @@ function RegisterScreen({ onRegister, onGoLogin }) {
         const updatedLocal = [...currentLocal.filter(u => u?.email !== newUser.email), newUser];
         await window.storage.set("users_db", JSON.stringify(updatedLocal));
 
-        // 2. Sincronizar con Firebase — CRÍTICO: leer primero lo que hay en Firebase
-        // para NO sobrescribir otros usuarios (Israel, otros registrados desde otros celulares).
-        // El registro de Karen NO debe borrar a Israel ni a nadie.
+        // 2. Sincronizar con Firebase
+        // ─────────────────────────────────────────────────────────────────
+        // CRÍTICO: Usamos escritura por path individual `users/{id}` en vez de
+        // sobrescribir todo el array `users`. Esto elimina la race condition
+        // donde dos usuarios registrándose en paralelo podían sobreescribirse
+        // mutuamente (causa del bug "Eira no aparece").
+        //
+        // Estrategia de doble escritura:
+        //   - Path individual: users/{id}    (la fuente confiable)
+        //   - Path agregado:   users         (compatible con código viejo)
+        // Si el path agregado falla, el individual sigue funcionando.
+        // ─────────────────────────────────────────────────────────────────
+        const userSinFotos = stripUserPhotos([newUser])[0];
+
+        // Escritura individual (más confiable, no compite con otros registros)
+        let escrituraIndividualOk = false;
         try {
-          let fbUsers = await fbRead("users");
-          if (fbUsers && !Array.isArray(fbUsers) && typeof fbUsers === "object") {
-            fbUsers = Object.values(fbUsers);
-          }
-          if (!Array.isArray(fbUsers)) fbUsers = [];
-          // Merge: quitar la versión vieja del mismo email (si existía) y añadir la nueva
-          const merged = [
-            ...fbUsers.filter(u => u?.email && u.email.toLowerCase() !== newUser.email.toLowerCase()),
-            stripUserPhotos([newUser])[0],
-          ];
-          await fbWrite("users", merged);
+          await fbWrite(`users/${newUser.id}`, userSinFotos);
+          escrituraIndividualOk = true;
         } catch(fbErr) {
-          console.warn("Firebase users sync failed:", fbErr);
-          // Fallback: al menos escribir solo el nuevo usuario a su propio path
-          try { await fbWrite(`users_by_email/${newUser.id}`, stripUserPhotos([newUser])[0]); } catch(e) {}
+          console.warn(`[Registro] Firebase users/${newUser.id} FAILED:`, fbErr);
+        }
+
+        // Backup adicional: en un path "users_pendientes" si requiere aprobación,
+        // así el admin tiene una vista garantizada de los registros recientes
+        if (needsApproval) {
+          try {
+            await fbWrite(`users_pendientes/${newUser.id}`, userSinFotos);
+          } catch(e) { console.warn("[Registro] users_pendientes failed:", e); }
+        }
+
+        if (!escrituraIndividualOk) {
+          // Reintentar 2 veces más con backoff
+          for (let i = 0; i < 2; i++) {
+            await new Promise(r => setTimeout(r, 1000 * (i+1)));
+            try {
+              await fbWrite(`users/${newUser.id}`, userSinFotos);
+              escrituraIndividualOk = true;
+              console.log(`[Registro] Reintento #${i+1} exitoso`);
+              break;
+            } catch(e) { console.warn(`[Registro] Reintento #${i+1} falló:`, e); }
+          }
+        }
+
+        if (!escrituraIndividualOk) {
+          console.error("[Registro] FALLO TOTAL Firebase. Usuario solo está en localStorage.");
+          // El usuario fue creado en localStorage pero NO en Firebase.
+          // Avisamos pero permitimos continuar (mejor que perder el registro).
+          setErr("⚠️ Registro guardado localmente. Si no apareces tras un minuto, contacta soporte.");
         }
       } catch(e) {
         console.warn("Storage save failed:", e);
@@ -13740,7 +14136,11 @@ function AdminPanel({ adminUser, onLogout }) {
           }
         } catch(e) {}
 
-        // 2. Lee Firebase
+        // 2. Lee Firebase desde DOS paths:
+        //    - users/{id}          → todos los usuarios (estructura nueva)
+        //    - users_pendientes/{id} → backup de registros pendientes
+        //    - users (legacy array)  → compatibilidad con código viejo
+        // Mergeamos todo para garantizar que NO se pierde ningún usuario.
         let fbUsers = [];
         try {
           let raw = await fbRead("users");
@@ -13748,6 +14148,20 @@ function AdminPanel({ adminUser, onLogout }) {
             raw = Object.values(raw);
           }
           if (Array.isArray(raw)) fbUsers = raw.filter(u => u && typeof u === "object");
+        } catch(e) {}
+
+        // ── BACKUP: leer users_pendientes para no perder registros recientes ──
+        try {
+          const pend = await fbRead("users_pendientes");
+          if (pend && typeof pend === "object") {
+            const pendArr = Array.isArray(pend) ? pend : Object.values(pend);
+            for (const p of pendArr) {
+              if (p?.email && !fbUsers.find(u => u?.email?.toLowerCase() === p.email.toLowerCase())) {
+                fbUsers.push(p);
+                console.log("[Admin sync] Recuperado de users_pendientes:", p.email);
+              }
+            }
+          }
         } catch(e) {}
 
         // 3. Combinar: demos garantizados + locales + Firebase (sin duplicar emails)
@@ -13784,9 +14198,14 @@ function AdminPanel({ adminUser, onLogout }) {
           setUsers(combined);
           // Persistir el merge para próxima vez
           try { await window.storage.set("users_db", JSON.stringify(combined)); } catch(e) {}
-          // Si Firebase está vacío, subir los demos para sincronizar
+          // Si Firebase está vacío, subir los demos por path individual
+          // (no como array completo, para mantener consistencia con la nueva estructura).
           if (fbUsers.length === 0) {
-            try { await fbWrite("users", combined); } catch(e) {}
+            for (const u of stripUserPhotos(combined)) {
+              if (u?.id) {
+                try { await fbWrite(`users/${u.id}`, u); } catch(e) {}
+              }
+            }
           }
         }
       } catch(e) { console.warn("Admin user sync failed:", e); }
@@ -13806,19 +14225,21 @@ function AdminPanel({ adminUser, onLogout }) {
     const updated = users.map(u => u.id===uid ? {...u,...patch} : u);
     await setUsers(updated);
     if (selectedUser?.id===uid) setSelectedUser(prev=>({...prev,...patch}));
-    // Sincronizar con Firebase: leer primero para no perder cambios de otros dispositivos
-    try {
-      let fbUsers = await fbRead("users");
-      if (fbUsers && !Array.isArray(fbUsers) && typeof fbUsers === "object") fbUsers = Object.values(fbUsers);
-      if (!Array.isArray(fbUsers)) fbUsers = [];
-      const fbUpdated = fbUsers.map(u => u?.id === uid ? {...u, ...patch} : u);
-      // Si el usuario no estaba en Firebase, añadirlo
-      if (!fbUpdated.find(u => u?.id === uid)) {
-        const localUser = updated.find(u => u?.id === uid);
-        if (localUser) fbUpdated.push(localUser);
-      }
-      await fbWrite("users", stripUserPhotos(fbUpdated));
-    } catch(e) { console.warn("FB sync failed:", e); }
+
+    // Sincronizar con Firebase usando PATH INDIVIDUAL para evitar race conditions.
+    // Ya no sobrescribimos todo el array `users` — esto causaba pérdidas de usuarios
+    // cuando dos admins/dispositivos actualizaban al mismo tiempo.
+    const userToWrite = updated.find(u => u?.id === uid);
+    if (userToWrite) {
+      try {
+        const clean = stripUserPhotos([userToWrite])[0];
+        await fbWrite(`users/${uid}`, clean);
+        // Si fue una aprobación (status: ACTIVO), también eliminar de users_pendientes
+        if (patch.status && patch.status !== "PENDIENTE") {
+          try { await fbWrite(`users_pendientes/${uid}`, null); } catch(e) {}
+        }
+      } catch(e) { console.warn("FB user update failed:", e); }
+    }
     toast("✅ Usuario actualizado");
   };
 
@@ -13827,12 +14248,9 @@ function AdminPanel({ adminUser, onLogout }) {
     const updated = users.filter(u=>u.id!==uid);
     await setUsers(updated);
     setSelectedUser(null);
-    try {
-      let fbUsers = await fbRead("users");
-      if (fbUsers && !Array.isArray(fbUsers) && typeof fbUsers === "object") fbUsers = Object.values(fbUsers);
-      if (!Array.isArray(fbUsers)) fbUsers = [];
-      await fbWrite("users", stripUserPhotos(fbUsers.filter(u => u?.id !== uid)));
-    } catch(e) { console.warn("FB sync failed:", e); }
+    // Eliminar por path individual (no sobrescribir el array)
+    try { await fbWrite(`users/${uid}`, null); } catch(e) { console.warn("FB user delete failed:", e); }
+    try { await fbWrite(`users_pendientes/${uid}`, null); } catch(e) {}
     toast("🗑 Usuario eliminado");
   };
 
@@ -15054,17 +15472,21 @@ export default function ChanceRoot() {
         try {
           const fb = await fbRead("users");
           if (Array.isArray(fb)) fbUsers = fb;
+          else if (fb && typeof fb === "object") fbUsers = Object.values(fb);
         } catch(e) { /* sin Firebase, OK */ }
         // Merge: demos primero, después usuarios locales/Firebase (sin duplicar emails)
         const allUsersLocal = [...existing, ...fbUsers.filter(f => !existing.find(e => e.email === f.email))];
         const merged = [...demos.filter(d=>!allUsersLocal.find(e=>e.email===d.email)), ...allUsersLocal];
         await window.storage.set("users_db", JSON.stringify(merged));
-        // Subir merge a Firebase, pero SIN fotos (las fotos pueden ser ~300KB
-        // c/u en base64 y harían el payload demasiado grande para Firebase).
-        // Las fotos solo viven en window.storage local de cada dispositivo.
-        try {
-          await fbWrite("users", stripUserPhotos(merged));
-        } catch(e) {}
+        // Subir solo los usuarios NUEVOS (que estaban local pero no en Firebase)
+        // usando paths individuales en vez de sobrescribir el array completo.
+        // Esto evita que perdamos registros recientes de otros dispositivos.
+        const cleanList = stripUserPhotos(merged);
+        const fbEmails = new Set(fbUsers.map(u => u?.email?.toLowerCase()).filter(Boolean));
+        const aSubir = cleanList.filter(u => u?.id && u?.email && !fbEmails.has(u.email.toLowerCase()));
+        for (const u of aSubir) {
+          try { await fbWrite(`users/${u.id}`, u); } catch(e) {}
+        }
         const sr = await window.storage.get("active_session");
         if (sr?.value) {
           const sess = JSON.parse(sr.value);
