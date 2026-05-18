@@ -1,40 +1,22 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// CHANCE — Detector de Tablero con IA (Gemini Vision)
-// ───────────────────────────────────────────────────────────────────────────
-// Cloudflare Pages Function que recibe una foto del tablero de billetes/chances
-// y devuelve los números detectados separados por tipo.
-//
+// CHANCE - Detector de Tablero con IA (Gemini Vision)
+// Cloudflare Pages Function
 // Endpoint: POST /api/detectar-tablero
-//
-// Body esperado (JSON):
-//   {
-//     "image": "data:image/jpeg;base64,/9j/4AAQ...",   // base64 con prefijo data:
-//     "tipo":  "billete" | "chance" | "ambos",
-//     "sorteo": "MIERCOLITO" | "DOMINICAL" | etc       // (opcional, contexto)
-//   }
-//
-// Respuesta:
-//   {
-//     "ok": true,
-//     "billetes": ["4567", "8488", "0101", ...],   // 4 cifras
-//     "chances":  ["07", "45", "98", ...],         // 2 cifras
-//     "raw": "texto de Gemini para debug"
-//   }
-//
-// Requiere variable de entorno: GEMINI_API_KEY (configurada en Cloudflare Pages)
-// ═══════════════════════════════════════════════════════════════════════════
+// Requiere: GEMINI_API_KEY como Secret en Cloudflare Pages
 
-export async function onRequestPost({ request, env }) {
-  // CORS preflight automático para fetch desde claudeapps.pages.dev
+export async function onRequestPost(context) {
+  const { request, env } = context;
+
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
     "Access-Control-Allow-Headers": "Content-Type",
   };
 
   try {
     const body = await request.json();
-    const { image, tipo = "ambos", sorteo = "MIERCOLITO" } = body || {};
+    const image = body.image;
+    const tipo = body.tipo || "ambos";
+    const sorteo = body.sorteo || "MIERCOLITO";
 
     if (!image || typeof image !== "string") {
       return new Response(
@@ -43,20 +25,17 @@ export async function onRequestPost({ request, env }) {
       );
     }
 
-    // Separar el mime y el base64 puro
-    // Formato esperado: "data:image/jpeg;base64,/9j/4AAQ..."
     let mime = "image/jpeg";
     let base64 = image;
     const match = image.match(/^data:([^;]+);base64,(.+)$/);
     if (match) {
-      mime   = match[1];
+      mime = match[1];
       base64 = match[2];
     }
 
-    // Validar tamaño aproximado (max ~10MB de imagen → ~13MB de base64)
     if (base64.length > 14 * 1024 * 1024) {
       return new Response(
-        JSON.stringify({ ok: false, error: "Imagen demasiado grande. Reduce calidad/tamaño." }),
+        JSON.stringify({ ok: false, error: "Imagen demasiado grande" }),
         { status: 413, headers: { "Content-Type": "application/json", ...corsHeaders } }
       );
     }
@@ -64,76 +43,30 @@ export async function onRequestPost({ request, env }) {
     const GEMINI_API_KEY = env.GEMINI_API_KEY;
     if (!GEMINI_API_KEY) {
       return new Response(
-        JSON.stringify({
-          ok: false,
-          error: "GEMINI_API_KEY no configurada en Cloudflare Pages.",
-        }),
+        JSON.stringify({ ok: false, error: "GEMINI_API_KEY no configurada en Cloudflare Pages" }),
         { status: 500, headers: { "Content-Type": "application/json", ...corsHeaders } }
       );
     }
 
-    // ───────────────────────────────────────────────────────────────────────
-    // Prompt cuidadosamente diseñado para tableros de billetería panameña
-    // ───────────────────────────────────────────────────────────────────────
-    const promptParts = [];
-
+    let promptText = "";
     if (tipo === "billete") {
-      promptParts.push(
-        "Eres un asistente que analiza fotos de tableros de billetes de la Lotería Nacional de Panamá."
-      );
-      promptParts.push(
-        "En esta foto hay billetes de 4 cifras de la LNB organizados en filas. Cada billete muestra " +
-        "claramente su número impreso en grande sobre un fondo de papel."
-      );
-      promptParts.push(
-        "Lista TODOS los números de 4 cifras visibles en el tablero. Algunos pueden repetirse " +
-        "(varios billetes con el mismo número) — en ese caso, repítelos en la lista."
-      );
+      promptText = "Eres un asistente que analiza fotos de tableros de billetes de la Loteria Nacional de Panama. En esta foto hay billetes de 4 cifras organizados en filas. Cada billete muestra claramente su numero impreso. Lista TODOS los numeros de 4 cifras visibles. Si un numero se repite, repitelo en la lista.";
     } else if (tipo === "chance") {
-      promptParts.push(
-        "Eres un asistente que analiza fotos de tableros de chances (números de 2 cifras) " +
-        "de la Lotería Nacional de Panamá."
-      );
-      promptParts.push(
-        "En esta foto hay chances de 2 cifras (00 a 99). Lista TODOS los números visibles. " +
-        "Si un número aparece varias veces, repítelo."
-      );
+      promptText = "Eres un asistente que analiza fotos de tableros de chances de 2 cifras (00-99) de la Loteria Nacional de Panama. Lista TODOS los numeros visibles. Si un numero aparece varias veces, repitelo.";
     } else {
-      // ambos
-      promptParts.push(
-        "Eres un asistente que analiza fotos de tableros de billetería panameña (Lotería Nacional)."
-      );
-      promptParts.push(
-        "En la foto hay BILLETES (números de 4 cifras) y/o CHANCES (números de 2 cifras). " +
-        "Identifica cada uno y clasifícalo por tipo según su cantidad de dígitos."
-      );
+      promptText = "Eres un asistente que analiza fotos de tableros de billeteria panamena. En la foto hay BILLETES (4 cifras) y/o CHANCES (2 cifras). Identifica cada uno y clasificalo por tipo segun su cantidad de digitos.";
     }
 
-    promptParts.push(
-      `Sorteo de contexto: ${sorteo}.`
-    );
-    promptParts.push(
-      "REGLAS CRÍTICAS de respuesta:"
-    );
-    promptParts.push(
-      "1) Responde SOLO con un objeto JSON válido, sin markdown ni texto antes o después.\n" +
-      "2) Estructura obligatoria:\n" +
-      '   {"billetes": ["XXXX", "XXXX", ...], "chances": ["XX", "XX", ...]}\n' +
-      "3) Cada billete debe tener exactamente 4 dígitos (rellena con ceros a la izquierda si fuera necesario).\n" +
-      "4) Cada chance debe tener exactamente 2 dígitos (rellena con ceros a la izquierda si fuera necesario).\n" +
-      "5) Si no estás 100% seguro de un número porque está borroso, tapado o cortado, OMÍTELO. " +
-      "Es mejor faltar uno que inventarlo.\n" +
-      "6) Repite los números que aparecen varias veces en el tablero.\n" +
-      "7) Si la foto no muestra un tablero de billetes/chances, responde " +
-      '{"billetes": [], "chances": [], "error": "No es un tablero de billetería"}.'
-    );
+    promptText += "\n\nSorteo de contexto: " + sorteo + ".";
+    promptText += "\n\nREGLAS:";
+    promptText += "\n1) Responde SOLO con JSON valido, sin markdown.";
+    promptText += "\n2) Estructura: {\"billetes\": [\"XXXX\"], \"chances\": [\"XX\"]}";
+    promptText += "\n3) Cada billete con exactamente 4 digitos.";
+    promptText += "\n4) Cada chance con exactamente 2 digitos.";
+    promptText += "\n5) Si no estas seguro de un numero, OMITELO.";
+    promptText += "\n6) Repite los numeros que aparecen varias veces.";
 
-    const fullPrompt = promptParts.join("\n\n");
-
-    // ───────────────────────────────────────────────────────────────────────
-    // Llamada a Gemini 2.0 Flash (multimodal, rápido, barato)
-    // ───────────────────────────────────────────────────────────────────────
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+    const geminiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY;
 
     const geminiResp = await fetch(geminiUrl, {
       method: "POST",
@@ -141,16 +74,16 @@ export async function onRequestPost({ request, env }) {
       body: JSON.stringify({
         contents: [{
           parts: [
-            { text: fullPrompt },
-            { inline_data: { mime_type: mime, data: base64 } },
-          ],
+            { text: promptText },
+            { inline_data: { mime_type: mime, data: base64 } }
+          ]
         }],
         generationConfig: {
-          temperature: 0.1,       // baja para ser determinista en lectura
-          maxOutputTokens: 4096,  // suficiente para tableros densos (~200 números)
-          responseMimeType: "application/json",
-        },
-      }),
+          temperature: 0.1,
+          maxOutputTokens: 4096,
+          responseMimeType: "application/json"
+        }
+      })
     });
 
     if (!geminiResp.ok) {
@@ -158,58 +91,53 @@ export async function onRequestPost({ request, env }) {
       return new Response(
         JSON.stringify({
           ok: false,
-          error: `Gemini respondió ${geminiResp.status}: ${errText.slice(0, 300)}`,
+          error: "Gemini HTTP " + geminiResp.status + ": " + errText.slice(0, 300)
         }),
         { status: 502, headers: { "Content-Type": "application/json", ...corsHeaders } }
       );
     }
 
     const geminiData = await geminiResp.json();
-    const rawText =
-      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    let rawText = "";
+    if (geminiData && geminiData.candidates && geminiData.candidates[0]) {
+      const c = geminiData.candidates[0];
+      if (c.content && c.content.parts && c.content.parts[0] && c.content.parts[0].text) {
+        rawText = c.content.parts[0].text;
+      }
+    }
 
-    // ───────────────────────────────────────────────────────────────────────
-    // Parsear la respuesta JSON con tolerancia a markdown accidental
-    // ───────────────────────────────────────────────────────────────────────
     let parsed = null;
     try {
-      // Si Gemini envolvió en ```json ... ``` lo limpiamos
-      const clean = rawText
-        .replace(/```json\s*/gi, "")
-        .replace(/```\s*$/g, "")
-        .trim();
+      const clean = rawText.replace(/```json\s*/gi, "").replace(/```\s*$/g, "").trim();
       parsed = JSON.parse(clean);
     } catch (e) {
       return new Response(
         JSON.stringify({
           ok: false,
           error: "No se pudo parsear la respuesta de Gemini",
-          raw: rawText.slice(0, 500),
+          raw: rawText.slice(0, 500)
         }),
         { status: 502, headers: { "Content-Type": "application/json", ...corsHeaders } }
       );
     }
 
-    // ───────────────────────────────────────────────────────────────────────
-    // Sanitizar: garantizar formato de cifras y filtrar basura
-    // ───────────────────────────────────────────────────────────────────────
     const billetes = (Array.isArray(parsed.billetes) ? parsed.billetes : [])
-      .map(n => String(n).replace(/\D/g, ""))
-      .filter(n => n.length >= 1 && n.length <= 4)
-      .map(n => n.padStart(4, "0"));
+      .map(function(n) { return String(n).replace(/\D/g, ""); })
+      .filter(function(n) { return n.length >= 1 && n.length <= 4; })
+      .map(function(n) { return n.padStart(4, "0"); });
 
     const chances = (Array.isArray(parsed.chances) ? parsed.chances : [])
-      .map(n => String(n).replace(/\D/g, ""))
-      .filter(n => n.length >= 1 && n.length <= 2)
-      .map(n => n.padStart(2, "0"));
+      .map(function(n) { return String(n).replace(/\D/g, ""); })
+      .filter(function(n) { return n.length >= 1 && n.length <= 2; })
+      .map(function(n) { return n.padStart(2, "0"); });
 
     return new Response(
       JSON.stringify({
         ok: true,
-        billetes,
-        chances,
+        billetes: billetes,
+        chances: chances,
         total: billetes.length + chances.length,
-        warning: parsed.error || null,
+        warning: parsed.error || null
       }),
       { status: 200, headers: { "Content-Type": "application/json", ...corsHeaders } }
     );
@@ -222,16 +150,35 @@ export async function onRequestPost({ request, env }) {
   }
 }
 
-// Manejo de CORS preflight
+// Handler GET para verificar deploy
+// Al abrir https://chanceloteria.pages.dev/api/detectar-tablero en el navegador
+// veras este JSON en lugar de la app de login.
+export async function onRequestGet() {
+  return new Response(
+    JSON.stringify({
+      ok: true,
+      status: "Detector de tablero activo",
+      message: "Esta function requiere POST con { image, tipo, sorteo }",
+      version: "1.0.1"
+    }, null, 2),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*"
+      }
+    }
+  );
+}
+
 export async function onRequestOptions() {
   return new Response(null, {
     status: 204,
     headers: {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
       "Access-Control-Allow-Headers": "Content-Type",
-      "Access-Control-Max-Age": "86400",
-    },
+      "Access-Control-Max-Age": "86400"
+    }
   });
 }
-
