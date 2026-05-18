@@ -8888,7 +8888,8 @@ function EscanearTableroIAModal({ activeSorteo, billetesActuales = [], chancesAc
   const [resultados, setResultados] = useState({ billetes: [], chances: [] });
   const [error, setError] = useState(null);
   const [procesando, setProcesando] = useState(false);
-  const fileRef = useRef(null);
+  const fileRef   = useRef(null);  // input para subir desde galería/archivo
+  const cameraRef = useRef(null);  // input separado para abrir cámara directamente
 
   // ── Compresión de imagen (cliente) ──────────────────────────────────────
   // Reducimos a max 1280px lado mayor, JPG calidad 0.85 → típicamente 200-400 KB
@@ -9054,25 +9055,58 @@ function EscanearTableroIAModal({ activeSorteo, billetesActuales = [], chancesAc
         {paso === "captura" && (
           <>
             <div style={{background:"rgba(167,139,250,.06)",border:"1px solid rgba(167,139,250,.25)",borderRadius:10,padding:"11px 13px",marginBottom:12,fontSize:11,color:"var(--muted)",lineHeight:1.5}}>
-              💡 <strong style={{color:"#A78BFA"}}>Cómo funciona:</strong> Toma una foto clara del tablero. La IA detectará los números de billetes (4 cifras) y chances (2 cifras), luego podrás revisar y ajustar las cantidades antes de guardar.
+              💡 <strong style={{color:"#A78BFA"}}>Cómo funciona:</strong> Toma una foto clara del tablero o sube una imagen existente. La IA detectará los números de billetes (4 cifras) y chances (2 cifras), luego podrás revisar y ajustar las cantidades antes de guardar.
             </div>
-            <button onClick={() => fileRef.current?.click()} disabled={procesando}
-              style={{
-                width:"100%", padding:"32px 14px", marginBottom:10,
-                background:"var(--bg3)", border:"2px dashed rgba(167,139,250,.4)",
-                borderRadius:14, color:"var(--text)", cursor: procesando ? "default" : "pointer",
-                fontFamily:"'DM Sans',sans-serif", display:"flex", flexDirection:"column",
-                alignItems:"center", gap:11
-              }}>
-              <div style={{fontSize:48}}>{procesando ? "⏳" : "📸"}</div>
-              <div style={{fontSize:14,fontWeight:800,color:"#A78BFA"}}>{procesando ? "Procesando..." : "Tomar foto del tablero"}</div>
-              <div style={{fontSize:10,color:"var(--muted)",textAlign:"center",lineHeight:1.5}}>
-                Luz uniforme · Sin sombras · Tablero completo<br/>
-                JPG/PNG · Se comprime automáticamente
-              </div>
-            </button>
-            <input ref={fileRef} type="file" accept="image/*" capture="environment"
+
+            {/* Dos opciones: tomar foto con cámara o adjuntar archivo */}
+            <div style={{display:"flex",gap:9,marginBottom:10}}>
+              <button onClick={() => cameraRef.current?.click()} disabled={procesando}
+                style={{
+                  flex:1, padding:"22px 10px",
+                  background:"var(--bg3)", border:"2px dashed rgba(167,139,250,.4)",
+                  borderRadius:14, color:"var(--text)", cursor: procesando ? "default" : "pointer",
+                  fontFamily:"'DM Sans',sans-serif", display:"flex", flexDirection:"column",
+                  alignItems:"center", gap:7
+                }}>
+                <div style={{fontSize:36}}>{procesando ? "⏳" : "📸"}</div>
+                <div style={{fontSize:12,fontWeight:800,color:"#A78BFA",textAlign:"center"}}>
+                  {procesando ? "Procesando..." : "Tomar foto"}
+                </div>
+                <div style={{fontSize:9,color:"var(--muted)",textAlign:"center",lineHeight:1.3}}>
+                  Con la cámara<br/>del teléfono
+                </div>
+              </button>
+
+              <button onClick={() => fileRef.current?.click()} disabled={procesando}
+                style={{
+                  flex:1, padding:"22px 10px",
+                  background:"var(--bg3)", border:"2px dashed rgba(59,158,255,.4)",
+                  borderRadius:14, color:"var(--text)", cursor: procesando ? "default" : "pointer",
+                  fontFamily:"'DM Sans',sans-serif", display:"flex", flexDirection:"column",
+                  alignItems:"center", gap:7
+                }}>
+                <div style={{fontSize:36}}>{procesando ? "⏳" : "🖼️"}</div>
+                <div style={{fontSize:12,fontWeight:800,color:"var(--blue)",textAlign:"center"}}>
+                  {procesando ? "Procesando..." : "Subir archivo"}
+                </div>
+                <div style={{fontSize:9,color:"var(--muted)",textAlign:"center",lineHeight:1.3}}>
+                  Desde galería<br/>o computadora
+                </div>
+              </button>
+            </div>
+
+            <div style={{fontSize:10,color:"var(--muted)",textAlign:"center",lineHeight:1.5,padding:"7px 11px",background:"rgba(255,255,255,.03)",borderRadius:8,marginBottom:6}}>
+              📋 <strong style={{color:"var(--text)"}}>Tips para mejor detección:</strong><br/>
+              Luz uniforme · Sin sombras · Tablero completo en el encuadre · Cámara perpendicular
+            </div>
+
+            {/* Input para CÁMARA (capture="environment" abre cámara trasera) */}
+            <input ref={cameraRef} type="file" accept="image/*" capture="environment"
               style={{display:"none"}} onChange={handleFile}/>
+            {/* Input para GALERÍA/ARCHIVO (sin capture, deja elegir cualquier imagen) */}
+            <input ref={fileRef} type="file" accept="image/*"
+              style={{display:"none"}} onChange={handleFile}/>
+
             <div style={{fontSize:10,color:"var(--muted)",textAlign:"center",marginTop:5,lineHeight:1.5}}>
               ⏱️ El análisis toma ~3-5 segundos · Costo: ~$0.001 por escaneo
             </div>
@@ -9187,22 +9221,60 @@ function EscanearTableroIAModal({ activeSorteo, billetesActuales = [], chancesAc
         )}
 
         {/* ── PASO ERROR ── */}
-        {paso === "error" && (
-          <div style={{padding:"20px 14px",textAlign:"center"}}>
-            <div style={{fontSize:42,marginBottom:8}}>⚠️</div>
-            <div style={{fontSize:14,fontWeight:800,color:"var(--red)",marginBottom:6}}>Error al analizar</div>
-            <div style={{fontSize:11,color:"var(--muted)",marginBottom:14,padding:"8px 11px",background:"rgba(255,75,110,.06)",border:"1px solid rgba(255,75,110,.2)",borderRadius:8,wordBreak:"break-word",lineHeight:1.5}}>
-              {error || "Error desconocido"}
+        {paso === "error" && (() => {
+          const errStr = String(error || "");
+          const es429    = errStr.includes("429") || errStr.toLowerCase().includes("quota") || errStr.toLowerCase().includes("rate");
+          const es401o403 = errStr.includes("401") || errStr.includes("403") || errStr.toLowerCase().includes("api key") || errStr.toLowerCase().includes("unauthorized");
+          const es413    = errStr.includes("413") || errStr.toLowerCase().includes("large");
+          const es502o5xx = errStr.includes("502") || errStr.includes("503") || errStr.includes("504") || errStr.toLowerCase().includes("gemini");
+
+          let titulo  = "Error al analizar";
+          let detalle = "";
+          let acciones = null;
+
+          if (es429) {
+            titulo = "Límite de IA alcanzado";
+            detalle = "Has hecho demasiados escaneos en poco tiempo, o tu cuenta de Gemini llegó al límite gratuito (1,500 escaneos/día).";
+            acciones = (
+              <div style={{fontSize:10,color:"var(--muted)",textAlign:"left",lineHeight:1.6,padding:"10px 12px",background:"rgba(244,196,48,.06)",border:"1px solid rgba(244,196,48,.2)",borderRadius:8,marginBottom:12}}>
+                <div style={{fontWeight:800,color:"var(--gold)",marginBottom:5}}>¿Qué hacer?</div>
+                <strong style={{color:"var(--text)"}}>1) Espera 60 segundos</strong> e intenta de nuevo (el contador por minuto se reinicia).<br/><br/>
+                <strong style={{color:"var(--text)"}}>2) Si pasa seguido</strong>, el admin debe activar billing en Google AI Studio (aistudio.google.com). El costo real es ~$0.001 por escaneo.
+              </div>
+            );
+          } else if (es401o403) {
+            titulo = "API key inválida";
+            detalle = "La clave GEMINI_API_KEY de Cloudflare Pages no es válida o expiró.";
+            acciones = (
+              <div style={{fontSize:10,color:"var(--muted)",lineHeight:1.6,padding:"10px 12px",background:"rgba(255,75,110,.06)",border:"1px solid rgba(255,75,110,.2)",borderRadius:8,marginBottom:12,textAlign:"left"}}>
+                Contacta al admin para verificar la clave en Cloudflare Pages → Settings → Variables.
+              </div>
+            );
+          } else if (es413) {
+            titulo = "Imagen demasiado grande";
+            detalle = "La imagen excede el tamaño permitido. Toma otra con menor resolución.";
+          } else if (es502o5xx) {
+            titulo = "Servidor de IA no disponible";
+            detalle = "Gemini está temporalmente caído. Intenta en unos minutos.";
+          } else {
+            detalle = errStr || "Error desconocido";
+          }
+
+          return (
+            <div style={{padding:"20px 14px",textAlign:"center"}}>
+              <div style={{fontSize:42,marginBottom:8}}>⚠️</div>
+              <div style={{fontSize:14,fontWeight:800,color:"var(--red)",marginBottom:6}}>{titulo}</div>
+              <div style={{fontSize:11,color:"var(--muted)",marginBottom:12,padding:"8px 11px",background:"rgba(255,75,110,.06)",border:"1px solid rgba(255,75,110,.2)",borderRadius:8,wordBreak:"break-word",lineHeight:1.5}}>
+                {detalle}
+              </div>
+              {acciones}
+              <button onClick={()=>{setPaso("captura");setError(null);setImagen(null);}}
+                style={{width:"100%",padding:"11px",background:"linear-gradient(135deg,#A78BFA,#8B5CF6)",border:"none",color:"#fff",borderRadius:10,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
+                🔄 Intentar de nuevo
+              </button>
             </div>
-            <div style={{fontSize:10,color:"var(--muted)",marginBottom:14,lineHeight:1.5}}>
-              Posibles causas: foto demasiado borrosa, GEMINI_API_KEY no configurada en Cloudflare Pages, o servidor caído.
-            </div>
-            <button onClick={()=>{setPaso("captura");setError(null);setImagen(null);}}
-              style={{width:"100%",padding:"11px",background:"linear-gradient(135deg,#A78BFA,#8B5CF6)",border:"none",color:"#fff",borderRadius:10,fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"'DM Sans'"}}>
-              🔄 Intentar de nuevo
-            </button>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );
